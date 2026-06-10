@@ -91,7 +91,7 @@ out
 
 # Nuxt.js build / generate output
 .nuxt
-dist
+# dist - included in fork for direct GitHub install (npx github:DITEC-Mracka/azure-devops-mcp)
 
 # Gatsby files
 .cache/
