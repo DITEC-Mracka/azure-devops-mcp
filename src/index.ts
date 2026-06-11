@@ -177,11 +177,11 @@ async function main() {
     // basicValue is already base64("{email}:{token}") — use it directly in the Authorization header
     const _originalFetch = globalThis.fetch;
     const orgOrigin = new URL(orgUrl).origin;
-    const isAdoRequest = (url: string) => url.startsWith(orgOrigin) || url.startsWith("https://almsearch.dev.azure.com/");
+    const isAdoRequest = (url: string) => url.startsWith(orgOrigin) || (!isOnPrem && url.startsWith("https://almsearch.dev.azure.com/"));
     globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
-      if (init?.headers && isAdoRequest(requestUrl)) {
-        const headers = new Headers(init.headers as HeadersInit);
+      if (isAdoRequest(requestUrl)) {
+        const headers = new Headers(init?.headers as HeadersInit | undefined);
         if (headers.get("Authorization")?.startsWith("Bearer ")) {
           headers.set("Authorization", `Basic ${basicValue}`);
           init = { ...init, headers };
@@ -205,6 +205,7 @@ async function main() {
       probeHeaders.delete("Authorization");
       let response = await _originalFetch(input, { ...init, headers: probeHeaders });
       if (response.status !== 401) return response;
+      await response.body?.cancel();
 
       // Check for Negotiate/NTLM challenge
       const wwwAuth = response.headers.get("www-authenticate");
@@ -233,6 +234,7 @@ async function main() {
           if (!serverAuth) break;
           const responseHeader = sso.createAuthResponseHeader(serverAuth);
           if (!responseHeader) break;
+          await response.body?.cancel();
           headers.set("Authorization", responseHeader);
           response = await _originalFetch(input, { ...init, headers });
           rounds++;
