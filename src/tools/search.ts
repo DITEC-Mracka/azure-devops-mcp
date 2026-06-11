@@ -24,7 +24,7 @@ function getSearchBaseUrl(serverUrl: string): string {
   try {
     const parsed = new URL(serverUrl);
     if (parsed.hostname === "dev.azure.com") {
-      return `https://almsearch.dev.azure.com${parsed.pathname}`;
+      return `https://almsearch.dev.azure.com${parsed.pathname.replace(/\/$/, "")}`;
     }
   } catch {
     /* fall through */
