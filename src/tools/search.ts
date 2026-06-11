@@ -5,7 +5,6 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebApi } from "azure-devops-node-api";
 import { IGitApi } from "azure-devops-node-api/GitApi.js";
 import { z } from "zod";
-import { isOnPrem, orgName } from "../index.js";
 import { apiVersion } from "../utils.js";
 import { VersionControlRecursionType } from "azure-devops-node-api/interfaces/GitInterfaces.js";
 import { GitItem } from "azure-devops-node-api/interfaces/GitInterfaces.js";
@@ -15,6 +14,23 @@ const SEARCH_TOOLS = {
   search_wiki: "search_wiki",
   search_workitem: "search_workitem",
 };
+
+/**
+ * Derives the search API base URL from the connection's serverUrl.
+ * Cloud: https://dev.azure.com/{org} → https://almsearch.dev.azure.com/{org}
+ * On-prem: uses serverUrl directly (search extension serves from same host)
+ */
+function getSearchBaseUrl(serverUrl: string): string {
+  try {
+    const parsed = new URL(serverUrl);
+    if (parsed.hostname === "dev.azure.com") {
+      return `https://almsearch.dev.azure.com${parsed.pathname}`;
+    }
+  } catch {
+    /* fall through */
+  }
+  return serverUrl;
+}
 
 function configureSearchTools(server: McpServer, tokenProvider: () => Promise<string>, connectionProvider: () => Promise<WebApi>, userAgentProvider: () => string) {
   server.tool(
@@ -36,8 +52,7 @@ function configureSearchTools(server: McpServer, tokenProvider: () => Promise<st
     async ({ searchText, project, repository, path, branch, includeFacets, skip, top }) => {
       const accessToken = await tokenProvider();
       const connection = await connectionProvider();
-      const searchBase = isOnPrem ? connection.serverUrl : `https://almsearch.dev.azure.com/${orgName}`;
-      const url = `${searchBase}/_apis/search/codesearchresults?api-version=${apiVersion}`;
+      const url = `${getSearchBaseUrl(connection.serverUrl)}/_apis/search/codesearchresults?api-version=${apiVersion}`;
 
       const requestBody: Record<string, unknown> = {
         searchText,
@@ -99,8 +114,7 @@ function configureSearchTools(server: McpServer, tokenProvider: () => Promise<st
     async ({ searchText, project, wiki, includeFacets, skip, top }) => {
       const accessToken = await tokenProvider();
       const connection = await connectionProvider();
-      const searchBase = isOnPrem ? connection.serverUrl : `https://almsearch.dev.azure.com/${orgName}`;
-      const url = `${searchBase}/_apis/search/wikisearchresults?api-version=${apiVersion}`;
+      const url = `${getSearchBaseUrl(connection.serverUrl)}/_apis/search/wikisearchresults?api-version=${apiVersion}`;
 
       const requestBody: Record<string, unknown> = {
         searchText,
@@ -158,8 +172,7 @@ function configureSearchTools(server: McpServer, tokenProvider: () => Promise<st
     async ({ searchText, project, areaPath, workItemType, state, assignedTo, includeFacets, skip, top }) => {
       const accessToken = await tokenProvider();
       const connection = await connectionProvider();
-      const searchBase = isOnPrem ? connection.serverUrl : `https://almsearch.dev.azure.com/${orgName}`;
-      const url = `${searchBase}/_apis/search/workitemsearchresults?api-version=${apiVersion}`;
+      const url = `${getSearchBaseUrl(connection.serverUrl)}/_apis/search/workitemsearchresults?api-version=${apiVersion}`;
 
       const requestBody: Record<string, unknown> = {
         searchText,
