@@ -25,8 +25,7 @@ async function getCurrentUserDetails(tokenProvider, connectionProvider, userAgen
 async function searchIdentities(identity, tokenProvider, connectionProvider, userAgentProvider) {
     const token = await tokenProvider();
     const connection = await connectionProvider();
-    const orgName = connection.serverUrl.split("/")[3];
-    const baseUrl = `https://vssps.dev.azure.com/${orgName}/_apis/identities`;
+    const baseUrl = `${connection.serverUrl}/_apis/identities`;
     const params = new URLSearchParams({
         "api-version": apiVersion,
         "searchFilter": "General",
