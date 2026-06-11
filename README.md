@@ -220,6 +220,38 @@ You can also configure default Azure DevOps project and team values from `.vscod
 }
 ```
 
+## 🏢 Azure DevOps Server (On-Premise)
+
+This fork supports connecting to on-premise Azure DevOps Server instances. Pass the full collection URL instead of an organization name:
+
+```bash
+mcp-server-azuredevops https://your-server/tfs/YourCollection --authentication pat
+```
+
+**mcp.json configuration:**
+
+```json
+{
+  "mcpServers": {
+    "azuredevops-onprem": {
+      "command": "npx",
+      "args": ["-y", "@anthropic/azure-devops-mcp", "https://your-server/tfs/YourCollection", "--authentication", "pat"],
+      "env": {
+        "PERSONAL_ACCESS_TOKEN": "<base64-encoded-pat>"
+      }
+    }
+  }
+}
+```
+
+**TLS / Certificates:**
+
+- For self-signed or internal CA certificates, set `NODE_EXTRA_CA_CERTS=/path/to/ca-bundle.pem`
+- As a last resort: `--allow-untrusted-cert` (disables all TLS verification — insecure)
+- For non-TLS servers: `--allow-http` (required for `http://` URLs)
+
+**Supported versions:** Azure DevOps Server 2020+ (API version 6.0+)
+
 ## 📝 Troubleshooting
 
 See the [Troubleshooting guide](./docs/TROUBLESHOOTING.md) for help with common issues and logging.
