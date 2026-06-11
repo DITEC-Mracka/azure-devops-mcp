@@ -128,6 +128,12 @@ function createAuthenticator(type: string, tenantId?: string): () => Promise<str
         return result.token;
       };
 
+    case "sspi":
+      logger.debug(`Authenticator: Using SSPI/Negotiate authentication (Windows integrated)`);
+      // SSPI auth is handled by SspiRequestHandler at the WebApi level, not via token provider.
+      // Return a no-op token provider — the handler manages Authorization headers directly.
+      return async () => "";
+
     default:
       logger.debug(`Authenticator: Using OAuth interactive authentication (default)`);
       const authenticator = new OAuthAuthenticator(tenantId);
