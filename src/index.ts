@@ -92,8 +92,9 @@ if (argv.allowUntrustedCert) {
 }
 
 // SSPI auto-selection: on-prem + Windows + no explicit auth override → sspi
+const authExplicitlySet = process.argv.some((a) => a === "--authentication" || a === "-a" || a.startsWith("--authentication=") || a.startsWith("-a="));
 let effectiveAuthType = argv.authentication as string;
-if (isOnPrem && process.platform === "win32" && argv.authentication === defaultAuthenticationType) {
+if (isOnPrem && process.platform === "win32" && !authExplicitlySet) {
   effectiveAuthType = "sspi";
   logger.info("On-prem URL detected on Windows — using SSPI authentication (override with --authentication pat)");
 }
@@ -189,6 +190,64 @@ async function main() {
       return _originalFetch(input, init);
     };
     logger.debug("PAT mode: global fetch interceptor installed to rewrite Bearer -> Basic auth headers (scoped to ADO URLs)");
+  } else if (effectiveAuthType === "sspi") {
+    // SSPI fetch interceptor: perform Negotiate/NTLM handshake for raw fetch calls to the on-prem server
+    const _originalFetch = globalThis.fetch;
+    const orgOrigin = new URL(orgUrl).origin;
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
+      if (!requestUrl.startsWith(orgOrigin)) {
+        return _originalFetch(input, init);
+      }
+
+      // Make initial request without auth header (avoid sending malformed 'Bearer ')
+      const probeHeaders = new Headers(init?.headers);
+      probeHeaders.delete("Authorization");
+      let response = await _originalFetch(input, { ...init, headers: probeHeaders });
+      if (response.status !== 401) return response;
+
+      // Check for Negotiate/NTLM challenge
+      const wwwAuth = response.headers.get("www-authenticate");
+      if (!wwwAuth || (!wwwAuth.toLowerCase().includes("negotiate") && !wwwAuth.toLowerCase().includes("ntlm"))) {
+        return response;
+      }
+
+      // Perform SSPI handshake
+      const winSso = await import("win-sso");
+      const targetHost = new URL(requestUrl).hostname;
+      const sso = new winSso.WinSso("Negotiate", targetHost, undefined, undefined);
+
+      try {
+        const authHeader = sso.createAuthRequestHeader();
+        const headers = new Headers(init?.headers);
+        headers.set("Authorization", authHeader);
+        headers.set("Connection", "keep-alive");
+        const newInit: RequestInit = { ...init, headers };
+
+        response = await _originalFetch(input, newInit);
+
+        // Multi-round-trip loop for NTLM (Type1 → Type2 → Type3)
+        let rounds = 0;
+        while (response.status === 401 && rounds < 5) {
+          const serverAuth = response.headers.get("www-authenticate");
+          if (!serverAuth) break;
+          const responseHeader = sso.createAuthResponseHeader(serverAuth);
+          if (!responseHeader) break;
+          headers.set("Authorization", responseHeader);
+          response = await _originalFetch(input, { ...init, headers });
+          rounds++;
+        }
+
+        return response;
+      } finally {
+        try {
+          sso.freeAuthContext();
+        } catch {
+          /* ignore cleanup errors */
+        }
+      }
+    };
+    logger.debug("SSPI mode: global fetch interceptor installed for Negotiate auth (scoped to on-prem server)");
   }
 
   // removing prompts until further notice
