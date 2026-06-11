@@ -70,5 +70,8 @@
     "!(dist/**)/**/*.(js|ts|jsx|tsx|json|css|md)": [
       "npm run format"
     ]
+  },
+  "optionalDependencies": {
+    "win-sso": "^1.3.3"
   }
 }

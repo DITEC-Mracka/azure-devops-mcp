@@ -252,6 +252,32 @@ mcp-server-azuredevops https://your-server/tfs/YourCollection --authentication p
 
 **Supported versions:** Azure DevOps Server 2020+ (API version 6.0+)
 
+### Windows Single Sign-On (SSPI)
+
+On Windows domain-joined machines, SSPI authentication is **auto-selected** when an on-prem URL is detected — no credentials needed:
+
+```bash
+# SSPI is auto-selected on Windows — no PAT or password required
+mcp-server-azuredevops https://your-server/tfs/YourCollection
+```
+
+**mcp.json for SSPI (zero credentials):**
+
+```json
+{
+  "mcpServers": {
+    "azuredevops-onprem": {
+      "command": "npx",
+      "args": ["-y", "@anthropic/azure-devops-mcp", "https://your-server/tfs/YourCollection"]
+    }
+  }
+}
+```
+
+SSPI uses the current Windows user's domain credentials (Kerberos or NTLM) transparently. Override with `--authentication pat` if needed.
+
+**Requirements:** Windows, domain-joined machine (or reachable Kerberos realm), Azure DevOps Server with Negotiate/NTLM enabled.
+
 ## 📝 Troubleshooting
 
 See the [Troubleshooting guide](./docs/TROUBLESHOOTING.md) for help with common issues and logging.
