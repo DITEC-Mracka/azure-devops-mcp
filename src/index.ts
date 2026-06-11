@@ -132,7 +132,15 @@ function getAzureDevOpsClient(getAzureDevOpsToken: () => Promise<string>, userAg
     const accessToken = await getAzureDevOpsToken();
     // For pat, accessToken is base64("{email}:{token}"). Decode to extract the token part,
     // since getPersonalAccessTokenHandler prepends ":" internally and just needs the raw token.
-    const authHandler = authType === "pat" ? getPersonalAccessTokenHandler(Buffer.from(accessToken, "base64").toString("utf8").split(":").slice(1).join(":")) : getBearerHandler(accessToken);
+    let authHandler;
+    if (authType === "pat") {
+      const decoded = Buffer.from(accessToken, "base64").toString("utf8");
+      const colonIdx = decoded.indexOf(":");
+      const rawPat = colonIdx >= 0 ? decoded.slice(colonIdx + 1) : decoded;
+      authHandler = getPersonalAccessTokenHandler(rawPat);
+    } else {
+      authHandler = getBearerHandler(accessToken);
+    }
     const connection = new WebApi(orgUrl, authHandler, undefined, {
       productName: "AzureDevOps.MCP",
       productVersion: packageVersion,
@@ -205,13 +213,15 @@ async function main() {
       probeHeaders.delete("Authorization");
       let response = await _originalFetch(input, { ...init, headers: probeHeaders });
       if (response.status !== 401) return response;
-      await response.body?.cancel();
 
       // Check for Negotiate/NTLM challenge
       const wwwAuth = response.headers.get("www-authenticate");
       if (!wwwAuth || (!wwwAuth.toLowerCase().includes("negotiate") && !wwwAuth.toLowerCase().includes("ntlm"))) {
         return response;
       }
+
+      // Drain probe response body to free TCP connection for handshake
+      await response.body?.cancel();
 
       // Perform SSPI handshake
       const winSso = await import("win-sso");

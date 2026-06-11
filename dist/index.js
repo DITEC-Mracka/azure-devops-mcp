@@ -116,7 +116,16 @@ function getAzureDevOpsClient(getAzureDevOpsToken, userAgentComposer, authType) 
         const accessToken = await getAzureDevOpsToken();
         // For pat, accessToken is base64("{email}:{token}"). Decode to extract the token part,
         // since getPersonalAccessTokenHandler prepends ":" internally and just needs the raw token.
-        const authHandler = authType === "pat" ? getPersonalAccessTokenHandler(Buffer.from(accessToken, "base64").toString("utf8").split(":").slice(1).join(":")) : getBearerHandler(accessToken);
+        let authHandler;
+        if (authType === "pat") {
+            const decoded = Buffer.from(accessToken, "base64").toString("utf8");
+            const colonIdx = decoded.indexOf(":");
+            const rawPat = colonIdx >= 0 ? decoded.slice(colonIdx + 1) : decoded;
+            authHandler = getPersonalAccessTokenHandler(rawPat);
+        }
+        else {
+            authHandler = getBearerHandler(accessToken);
+        }
         const connection = new WebApi(orgUrl, authHandler, undefined, {
             productName: "AzureDevOps.MCP",
             productVersion: packageVersion,
@@ -157,11 +166,11 @@ async function main() {
         // basicValue is already base64("{email}:{token}") — use it directly in the Authorization header
         const _originalFetch = globalThis.fetch;
         const orgOrigin = new URL(orgUrl).origin;
-        const isAdoRequest = (url) => url.startsWith(orgOrigin) || url.startsWith("https://almsearch.dev.azure.com/");
+        const isAdoRequest = (url) => url.startsWith(orgOrigin) || (!isOnPrem && url.startsWith("https://almsearch.dev.azure.com/"));
         globalThis.fetch = async (input, init) => {
             const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-            if (init?.headers && isAdoRequest(requestUrl)) {
-                const headers = new Headers(init.headers);
+            if (isAdoRequest(requestUrl)) {
+                const headers = new Headers(init?.headers);
                 if (headers.get("Authorization")?.startsWith("Bearer ")) {
                     headers.set("Authorization", `Basic ${basicValue}`);
                     init = { ...init, headers };
@@ -191,6 +200,8 @@ async function main() {
             if (!wwwAuth || (!wwwAuth.toLowerCase().includes("negotiate") && !wwwAuth.toLowerCase().includes("ntlm"))) {
                 return response;
             }
+            // Drain probe response body to free TCP connection for handshake
+            await response.body?.cancel();
             // Perform SSPI handshake
             const winSso = await import("win-sso");
             const targetHost = new URL(requestUrl).hostname;
@@ -211,6 +222,7 @@ async function main() {
                     const responseHeader = sso.createAuthResponseHeader(serverAuth);
                     if (!responseHeader)
                         break;
+                    await response.body?.cancel();
                     headers.set("Authorization", responseHeader);
                     response = await _originalFetch(input, { ...init, headers });
                     rounds++;
@@ -221,7 +233,9 @@ async function main() {
                 try {
                     sso.freeAuthContext();
                 }
-                catch { /* ignore cleanup errors */ }
+                catch {
+                    /* ignore cleanup errors */
+                }
             }
         };
         logger.debug("SSPI mode: global fetch interceptor installed for Negotiate auth (scoped to on-prem server)");

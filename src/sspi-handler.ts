@@ -85,6 +85,10 @@ export class SspiRequestHandler implements IRequestHandler {
           throw new Error("SSPI handshake failed: server returned 401 without WWW-Authenticate header.");
         }
 
+        // Drain response body to free TCP connection for next round-trip (NTLM requires same socket)
+        response.message.resume();
+        await new Promise<void>((resolve) => response.message.on("end", resolve));
+
         // Generate response token from server challenge
         const responseHeader = sso.createAuthResponseHeader(serverAuthHeader);
         if (!responseHeader) {
