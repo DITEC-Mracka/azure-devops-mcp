@@ -4,3 +4,6 @@ dist/
 coverage/
 
 *.log*
+
+# .vscode/mcp.json is a path reference, not valid JSON
+.vscode/mcp.json
