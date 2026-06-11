@@ -1,16 +1,28 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+import http from "http";
+import https from "https";
+import net from "net";
 import { logger } from "./logger.js";
 /**
  * SSPI-based Negotiate/NTLM authentication handler for on-prem Azure DevOps Server.
  * Uses `win-sso` for Windows integrated authentication (SSPI).
  * Implements IRequestHandler from typed-rest-client for use with WebApi.
+ *
+ * Note: The handleAuthentication method performs the full NTLM/Negotiate handshake
+ * using raw http(s) requests with a keep-alive agent to ensure the same TCP connection
+ * is reused across all round-trips (required by NTLM).
  */
 export class SspiRequestHandler {
     serverUrl;
     winSsoModule = null;
+    keepAliveAgent;
     constructor(serverUrl) {
         this.serverUrl = serverUrl;
+        const isHttps = serverUrl.startsWith("https");
+        this.keepAliveAgent = isHttps
+            ? new https.Agent({ keepAlive: true, maxSockets: 1, rejectUnauthorized: process.env.NODE_TLS_REJECT_UNAUTHORIZED !== "0" ? true : false })
+            : new http.Agent({ keepAlive: true, maxSockets: 1 });
     }
     /**
      * Dynamically loads the win-sso module. Throws a clear error if unavailable.
@@ -27,7 +39,6 @@ export class SspiRequestHandler {
         }
     }
     prepareRequest(options) {
-        // No-op — authentication is handled via canHandleAuthentication/handleAuthentication cycle
         // Keep connection alive for multi-round-trip NTLM handshake
         options.headers = options.headers ?? {};
         options.headers["Connection"] = "keep-alive";
@@ -41,59 +52,112 @@ export class SspiRequestHandler {
         const authHeader = wwwAuth.toLowerCase();
         return authHeader.includes("negotiate") || authHeader.includes("ntlm");
     }
+    /**
+     * Performs a raw HTTP(S) request using the keep-alive agent to maintain TCP connection.
+     */
+    rawRequest(url, method, headers, body) {
+        return new Promise((resolve, reject) => {
+            const options = {
+                hostname: url.hostname,
+                port: url.port || (url.protocol === "https:" ? 443 : 80),
+                path: url.pathname + url.search,
+                method,
+                headers: { ...headers, Connection: "keep-alive" },
+                agent: this.keepAliveAgent,
+            };
+            const transport = url.protocol === "https:" ? https : http;
+            const req = transport.request(options, (res) => {
+                const chunks = [];
+                res.on("data", (chunk) => chunks.push(chunk));
+                res.on("end", () => {
+                    resolve({
+                        statusCode: res.statusCode ?? 0,
+                        headers: res.headers,
+                        body: Buffer.concat(chunks).toString("utf8"),
+                    });
+                });
+            });
+            req.setTimeout(30_000, () => {
+                req.destroy(new Error("SSPI handshake request timed out after 30s"));
+            });
+            req.on("error", reject);
+            if (body)
+                req.write(body);
+            req.end();
+        });
+    }
     async handleAuthentication(httpClient, requestInfo, objs) {
         const winSso = await this.loadWinSso();
         if (!winSso.osSupported()) {
             throw new Error("SSPI authentication is only available on Windows. " + "Use --authentication pat on other platforms.");
         }
-        // Extract target hostname for SPN
-        const targetHost = requestInfo.parsedUrl.hostname ?? new URL(this.serverUrl).hostname;
-        // Extract TLS peer certificate for EPA (channel binding)
-        let peerCert;
-        // The peer certificate is not directly accessible from the typed-rest-client interface,
-        // so EPA will be available when we can obtain the cert from the underlying socket.
-        // For now, pass undefined — EPA requires socket-level access which will be enhanced later.
+        const requestUrl = new URL(requestInfo.parsedUrl.href);
+        const targetHost = requestUrl.hostname;
+        const method = requestInfo.options.method ?? "GET";
+        const bodyStr = typeof objs === "string" ? objs : undefined;
+        // Build headers from original request (excluding Authorization)
+        const headers = {};
+        if (requestInfo.options.headers) {
+            for (const [key, value] of Object.entries(requestInfo.options.headers)) {
+                if (key.toLowerCase() !== "authorization") {
+                    headers[key] = value;
+                }
+            }
+        }
         let sso;
         try {
-            sso = new winSso.WinSso("Negotiate", targetHost, peerCert, undefined);
+            sso = new winSso.WinSso("Negotiate", targetHost, undefined, undefined);
             // Round 1: Send initial Negotiate token
             const authRequestHeader = sso.createAuthRequestHeader();
-            if (!requestInfo.options.headers) {
-                requestInfo.options.headers = {};
-            }
-            requestInfo.options.headers["Authorization"] = authRequestHeader;
-            let response = await httpClient.requestRaw(requestInfo, objs);
+            headers["Authorization"] = authRequestHeader;
+            let response = await this.rawRequest(requestUrl, method, headers, bodyStr);
+            logger.debug(`SSPI handshake round 1: status=${response.statusCode}`);
             // Multi-round-trip loop (NTLM requires Type1 → Type2 → Type3)
             let rounds = 0;
-            const maxRounds = 5; // Safety limit
-            while (response.message.statusCode === 401 && rounds < maxRounds) {
-                const serverAuthHeader = response.message.headers["www-authenticate"];
+            const maxRounds = 5;
+            while (response.statusCode === 401 && rounds < maxRounds) {
+                const serverAuthHeader = response.headers["www-authenticate"];
                 if (!serverAuthHeader) {
                     throw new Error("SSPI handshake failed: server returned 401 without WWW-Authenticate header.");
                 }
-                // Drain response body to free TCP connection for next round-trip (NTLM requires same socket)
-                response.message.resume();
-                await new Promise((resolve) => response.message.on("end", resolve));
+                // Extract only the Negotiate part with token from potentially multi-scheme header
+                const negotiatePart = serverAuthHeader.split(",").map((s) => s.trim()).find((s) => s.toLowerCase().startsWith("negotiate "));
+                if (!negotiatePart) {
+                    throw new Error("SSPI handshake failed: server did not return a Negotiate challenge token. " +
+                        `WWW-Authenticate: ${serverAuthHeader}`);
+                }
                 // Generate response token from server challenge
-                const responseHeader = sso.createAuthResponseHeader(serverAuthHeader);
+                const responseHeader = sso.createAuthResponseHeader(negotiatePart);
                 if (!responseHeader) {
-                    // Empty response means handshake is complete on client side but server still returned 401
                     throw new Error("SSPI handshake failed: authentication was rejected by the server.");
                 }
-                requestInfo.options.headers["Authorization"] = responseHeader;
-                response = await httpClient.requestRaw(requestInfo, objs);
+                headers["Authorization"] = responseHeader;
+                response = await this.rawRequest(requestUrl, method, headers, bodyStr);
+                logger.debug(`SSPI handshake round ${rounds + 2}: status=${response.statusCode}`);
                 rounds++;
             }
-            if (response.message.statusCode === 401) {
+            if (response.statusCode === 401) {
                 throw new Error("SSPI authentication failed after multiple rounds. " + "Verify the server accepts Negotiate/NTLM and the machine is domain-joined.");
             }
-            return response;
+            // Convert raw response back to IHttpClientResponse format for typed-rest-client
+            const incomingMessage = new http.IncomingMessage(new net.Socket());
+            incomingMessage.statusCode = response.statusCode;
+            incomingMessage.headers = response.headers;
+            // Push the body data so consumers can read it
+            incomingMessage.push(response.body);
+            incomingMessage.push(null);
+            const responseBody = response.body;
+            return {
+                message: incomingMessage,
+                readBody() {
+                    return Promise.resolve(responseBody);
+                },
+            };
         }
         catch (error) {
             if (error instanceof Error && error.message.startsWith("SSPI")) {
-                throw error; // Re-throw our own errors
+                throw error;
             }
-            // Wrap win-sso errors with context
             const msg = error instanceof Error ? error.message : String(error);
             throw new Error(`SSPI authentication failed: ${msg}. ` + "Verify the machine is domain-joined and has network access to the server. " + "Use --authentication pat as a fallback.");
         }

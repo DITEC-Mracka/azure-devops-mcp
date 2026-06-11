@@ -19,6 +19,7 @@ import { UserAgentComposer } from "./useragent.js";
 import { packageVersion } from "./version.js";
 import { DomainsManager } from "./shared/domains.js";
 import { resolveOrgUrl } from "./utils.js";
+import { Agent as UndiciAgent } from "undici";
 
 function isGitHubCodespaceEnv(): boolean {
   return process.env.CODESPACES === "true" && !!process.env.CODESPACE_NAME;
@@ -90,6 +91,9 @@ if (argv.allowUntrustedCert) {
   process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
   logger.warn("WARNING: TLS certificate verification is disabled (--allow-untrusted-cert). This is insecure and affects all connections in this process.");
 }
+
+// HTTP/1.1 agent for on-prem servers (IIS often doesn't support HTTP/2 correctly)
+const onPremDispatcher = isOnPrem ? new UndiciAgent({ allowH2: false }) : undefined;
 
 // SSPI auto-selection: on-prem + Windows + no explicit auth override → sspi
 const authExplicitlySet = process.argv.some((a) => a === "--authentication" || a === "-a" || a.startsWith("--authentication=") || a.startsWith("-a="));
@@ -208,10 +212,13 @@ async function main() {
         return _originalFetch(input, init);
       }
 
+      // Force HTTP/1.1 for on-prem (IIS often rejects HTTP/2)
+      const fetchOpts = { ...init, dispatcher: onPremDispatcher } as RequestInit;
+
       // Make initial request without auth header (avoid sending malformed 'Bearer ')
       const probeHeaders = new Headers(init?.headers);
       probeHeaders.delete("Authorization");
-      let response = await _originalFetch(input, { ...init, headers: probeHeaders });
+      let response = await _originalFetch(input, { ...fetchOpts, headers: probeHeaders });
       if (response.status !== 401) return response;
 
       // Check for Negotiate/NTLM challenge
@@ -233,20 +240,26 @@ async function main() {
         const headers = new Headers(init?.headers);
         headers.set("Authorization", authHeader);
         headers.set("Connection", "keep-alive");
-        const newInit: RequestInit = { ...init, headers };
 
-        response = await _originalFetch(input, newInit);
+        response = await _originalFetch(input, { ...fetchOpts, headers });
 
         // Multi-round-trip loop for NTLM (Type1 → Type2 → Type3)
         let rounds = 0;
         while (response.status === 401 && rounds < 5) {
           const serverAuth = response.headers.get("www-authenticate");
           if (!serverAuth) break;
-          const responseHeader = sso.createAuthResponseHeader(serverAuth);
+          // Extract only the Negotiate token from potentially multi-scheme header
+          // e.g. "Bearer, Basic realm=..., Negotiate YII..., NTLM" → "Negotiate YII..."
+          const negotiatePart = serverAuth
+            .split(",")
+            .map((s) => s.trim())
+            .find((s) => s.toLowerCase().startsWith("negotiate "));
+          if (!negotiatePart) break;
+          const responseHeader = sso.createAuthResponseHeader(negotiatePart);
           if (!responseHeader) break;
           await response.body?.cancel();
           headers.set("Authorization", responseHeader);
-          response = await _originalFetch(input, { ...init, headers });
+          response = await _originalFetch(input, { ...fetchOpts, headers });
           rounds++;
         }
 
@@ -311,7 +324,7 @@ async function main() {
         } else {
           headers["Authorization"] = `Bearer ${token}`;
         }
-        const response = await fetch(checkUrl, { method: "GET", headers, signal: AbortSignal.timeout(10_000) });
+        const response = await fetch(checkUrl, { method: "GET", headers, signal: AbortSignal.timeout(10_000), dispatcher: onPremDispatcher } as RequestInit);
         if (!response.ok) {
           logger.error(`On-prem connection check failed: HTTP ${response.status} ${response.statusText} from ${checkUrl}`);
           process.exit(1);
