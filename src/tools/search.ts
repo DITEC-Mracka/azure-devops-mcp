@@ -6,7 +6,6 @@ import { WebApi } from "azure-devops-node-api";
 import { IGitApi } from "azure-devops-node-api/GitApi.js";
 import { z } from "zod";
 import { apiVersion } from "../utils.js";
-import { orgName } from "../index.js";
 import { VersionControlRecursionType } from "azure-devops-node-api/interfaces/GitInterfaces.js";
 import { GitItem } from "azure-devops-node-api/interfaces/GitInterfaces.js";
 
@@ -36,7 +35,7 @@ function configureSearchTools(server: McpServer, tokenProvider: () => Promise<st
     async ({ searchText, project, repository, path, branch, includeFacets, skip, top }) => {
       const accessToken = await tokenProvider();
       const connection = await connectionProvider();
-      const url = `https://almsearch.dev.azure.com/${orgName}/_apis/search/codesearchresults?api-version=${apiVersion}`;
+      const url = `${connection.serverUrl}/_apis/search/codesearchresults?api-version=${apiVersion}`;
 
       const requestBody: Record<string, unknown> = {
         searchText,
@@ -66,6 +65,9 @@ function configureSearchTools(server: McpServer, tokenProvider: () => Promise<st
       });
 
       if (!response.ok) {
+        if (response.status === 404) {
+          return { content: [{ type: "text" as const, text: "Search is not available on this server. The Azure DevOps Server Search extension may not be installed." }] };
+        }
         throw new Error(`Azure DevOps Code Search API error: ${response.status} ${response.statusText}`);
       }
 
@@ -94,7 +96,8 @@ function configureSearchTools(server: McpServer, tokenProvider: () => Promise<st
     },
     async ({ searchText, project, wiki, includeFacets, skip, top }) => {
       const accessToken = await tokenProvider();
-      const url = `https://almsearch.dev.azure.com/${orgName}/_apis/search/wikisearchresults?api-version=${apiVersion}`;
+      const connection = await connectionProvider();
+      const url = `${connection.serverUrl}/_apis/search/wikisearchresults?api-version=${apiVersion}`;
 
       const requestBody: Record<string, unknown> = {
         searchText,
@@ -122,6 +125,9 @@ function configureSearchTools(server: McpServer, tokenProvider: () => Promise<st
       });
 
       if (!response.ok) {
+        if (response.status === 404) {
+          return { content: [{ type: "text" as const, text: "Wiki Search is not available on this server. The Azure DevOps Server Search extension may not be installed." }] };
+        }
         throw new Error(`Azure DevOps Wiki Search API error: ${response.status} ${response.statusText}`);
       }
 
@@ -148,7 +154,8 @@ function configureSearchTools(server: McpServer, tokenProvider: () => Promise<st
     },
     async ({ searchText, project, areaPath, workItemType, state, assignedTo, includeFacets, skip, top }) => {
       const accessToken = await tokenProvider();
-      const url = `https://almsearch.dev.azure.com/${orgName}/_apis/search/workitemsearchresults?api-version=${apiVersion}`;
+      const connection = await connectionProvider();
+      const url = `${connection.serverUrl}/_apis/search/workitemsearchresults?api-version=${apiVersion}`;
 
       const requestBody: Record<string, unknown> = {
         searchText,
@@ -179,6 +186,9 @@ function configureSearchTools(server: McpServer, tokenProvider: () => Promise<st
       });
 
       if (!response.ok) {
+        if (response.status === 404) {
+          return { content: [{ type: "text" as const, text: "Work Item Search is not available on this server. The Azure DevOps Server Search extension may not be installed." }] };
+        }
         throw new Error(`Azure DevOps Work Item Search API error: ${response.status} ${response.statusText}`);
       }
 
