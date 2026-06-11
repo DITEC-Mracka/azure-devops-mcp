@@ -9,6 +9,7 @@ import { hideBin } from "yargs/helpers";
 import { createAuthenticator } from "./auth.js";
 import { logger } from "./logger.js";
 import { getOrgTenant } from "./org-tenants.js";
+import { createSspiHandler } from "./sspi-handler.js";
 //import { configurePrompts } from "./prompts.js";
 import { configureAllTools } from "./tools.js";
 import { UserAgentComposer } from "./useragent.js";
@@ -42,7 +43,7 @@ const argv = yargs(hideBin(process.argv))
     alias: "a",
     describe: "Type of authentication to use",
     type: "string",
-    choices: ["interactive", "azcli", "env", "envvar", "pat"],
+    choices: ["interactive", "azcli", "env", "envvar", "pat", "sspi"],
     default: defaultAuthenticationType,
 })
     .option("tenant", {
@@ -83,11 +84,34 @@ if (argv.allowUntrustedCert) {
 if (argv.allowHttp && argv.authentication === "pat") {
     logger.warn("WARNING: Using PAT authentication over HTTP. Credentials will travel in cleartext over the network.");
 }
+// SSPI auto-selection: on-prem + Windows + no explicit auth override → sspi
+let effectiveAuthType = argv.authentication;
+if (isOnPrem && process.platform === "win32" && argv.authentication === defaultAuthenticationType) {
+    effectiveAuthType = "sspi";
+    logger.info("On-prem URL detected on Windows — using SSPI authentication (override with --authentication pat)");
+}
+// Platform guard: sspi only on Windows
+if (effectiveAuthType === "sspi" && process.platform !== "win32") {
+    logger.error("SSPI authentication is only available on Windows. Use --authentication pat instead.");
+    process.exit(1);
+}
 export { orgUrl, isOnPrem };
 const domainsManager = new DomainsManager(argv.domains);
 export const enabledDomains = domainsManager.getEnabledDomains();
+let sspiHandler = null;
 function getAzureDevOpsClient(getAzureDevOpsToken, userAgentComposer, authType) {
     return async () => {
+        if (authType === "sspi") {
+            if (!sspiHandler) {
+                sspiHandler = await createSspiHandler(orgUrl);
+            }
+            const connection = new WebApi(orgUrl, sspiHandler, undefined, {
+                productName: "AzureDevOps.MCP",
+                productVersion: packageVersion,
+                userAgent: userAgentComposer.userAgent,
+            });
+            return connection;
+        }
         const accessToken = await getAzureDevOpsToken();
         // For pat, accessToken is base64("{email}:{token}"). Decode to extract the token part,
         // since getPersonalAccessTokenHandler prepends ":" internally and just needs the raw token.
@@ -105,7 +129,7 @@ async function main() {
         organization: orgName,
         organizationUrl: orgUrl,
         mode: isOnPrem ? "on-prem" : "cloud",
-        authentication: argv.authentication,
+        authentication: effectiveAuthType,
         tenant: argv.tenant,
         domains: argv.domains,
         enabledDomains: Array.from(enabledDomains),
@@ -126,8 +150,8 @@ async function main() {
         userAgentComposer.appendMcpClientInfo(server.server.getClientVersion());
     };
     const tenantId = isOnPrem ? argv.tenant : ((await getOrgTenant(orgName)) ?? argv.tenant);
-    const authenticator = createAuthenticator(argv.authentication, tenantId);
-    if (argv.authentication === "pat") {
+    const authenticator = createAuthenticator(effectiveAuthType, tenantId);
+    if (effectiveAuthType === "pat") {
         const basicValue = await authenticator();
         // basicValue is already base64("{email}:{token}") — use it directly in the Authorization header
         const _originalFetch = globalThis.fetch;
@@ -145,36 +169,73 @@ async function main() {
     }
     // removing prompts until further notice
     // configurePrompts(server);
-    configureAllTools(server, authenticator, getAzureDevOpsClient(authenticator, userAgentComposer, argv.authentication), () => userAgentComposer.userAgent, enabledDomains);
+    configureAllTools(server, authenticator, getAzureDevOpsClient(authenticator, userAgentComposer, effectiveAuthType), () => userAgentComposer.userAgent, enabledDomains);
     // On-prem startup connection check — fail fast on misconfiguration
     if (isOnPrem) {
         try {
             const checkUrl = `${orgUrl}/_apis/connectionData`;
-            const token = await authenticator();
-            const headers = {
-                "Content-Type": "application/json",
-                "User-Agent": userAgentComposer.userAgent,
-            };
-            if (argv.authentication === "pat") {
-                headers["Authorization"] = `Basic ${token}`;
+            if (effectiveAuthType === "sspi") {
+                // For SSPI, use the WebApi connection which handles the Negotiate handshake
+                const connection = await getAzureDevOpsClient(authenticator, userAgentComposer, effectiveAuthType)();
+                const response = await fetch(checkUrl, {
+                    method: "GET",
+                    headers: { "Content-Type": "application/json", "User-Agent": userAgentComposer.userAgent },
+                });
+                // If fetch without auth returns 401, that's expected (SSPI will handle it on actual API calls via WebApi)
+                // We just verify the server is reachable
+                if (response.status !== 401 && !response.ok) {
+                    logger.error(`On-prem connection check failed: HTTP ${response.status} ${response.statusText} from ${checkUrl}`);
+                    process.exit(1);
+                }
+                // Try to get server version if accessible
+                if (response.ok) {
+                    const data = (await response.json());
+                    logger.info("On-prem connection verified (SSPI)", {
+                        serverUrl: orgUrl,
+                        serverVersion: data.serverVersion ?? "unknown",
+                        deploymentType: data.deploymentType ?? "unknown",
+                    });
+                }
+                else {
+                    logger.info("On-prem server reachable (SSPI auth will negotiate on first API call)", { serverUrl: orgUrl });
+                }
+                // Validate SSPI handler can be created (catches domain-join issues early)
+                if (!sspiHandler) {
+                    sspiHandler = await createSspiHandler(orgUrl);
+                }
             }
             else {
-                headers["Authorization"] = `Bearer ${token}`;
+                const token = await authenticator();
+                const headers = {
+                    "Content-Type": "application/json",
+                    "User-Agent": userAgentComposer.userAgent,
+                };
+                if (effectiveAuthType === "pat") {
+                    headers["Authorization"] = `Basic ${token}`;
+                }
+                else {
+                    headers["Authorization"] = `Bearer ${token}`;
+                }
+                const response = await fetch(checkUrl, { method: "GET", headers });
+                if (!response.ok) {
+                    logger.error(`On-prem connection check failed: HTTP ${response.status} ${response.statusText} from ${checkUrl}`);
+                    process.exit(1);
+                }
+                const data = (await response.json());
+                logger.info("On-prem connection verified", {
+                    serverUrl: orgUrl,
+                    serverVersion: data.serverVersion ?? "unknown",
+                    deploymentType: data.deploymentType ?? "unknown",
+                });
             }
-            const response = await fetch(checkUrl, { method: "GET", headers });
-            if (!response.ok) {
-                logger.error(`On-prem connection check failed: HTTP ${response.status} ${response.statusText} from ${checkUrl}`);
-                process.exit(1);
-            }
-            const data = (await response.json());
-            logger.info("On-prem connection verified", {
-                serverUrl: orgUrl,
-                serverVersion: data.serverVersion ?? "unknown",
-                deploymentType: data.deploymentType ?? "unknown",
-            });
         }
         catch (error) {
-            logger.error("On-prem connection check failed — cannot reach server. Verify the URL is correct and the server is reachable.", error);
+            if (error instanceof Error && error.message.includes("SSPI")) {
+                logger.error(`SSPI authentication failed: ${error.message}`);
+            }
+            else {
+                logger.error("On-prem connection check failed — cannot reach server. Verify the URL is correct and the server is reachable.", error);
+            }
             process.exit(1);
         }
     }
