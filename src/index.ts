@@ -55,11 +55,58 @@ const argv = yargs(hideBin(process.argv))
     describe: "Azure tenant ID (optional, applied when using 'interactive' and 'azcli' type of authentication)",
     type: "string",
   })
+  .option("allow-untrusted-cert", {
+    describe: "Disable TLS certificate verification (sets NODE_TLS_REJECT_UNAUTHORIZED=0). Use only as last resort for self-signed certs.",
+    type: "boolean",
+    default: false,
+  })
+  .option("allow-http", {
+    describe: "Allow http:// URLs (insecure). Required when connecting to on-prem servers without TLS.",
+    type: "boolean",
+    default: false,
+  })
   .help()
   .parseSync();
 
 export const orgName = argv.organization as string;
-const orgUrl = "https://dev.azure.com/" + orgName;
+
+// --- URL detection: cloud vs on-prem mode ---
+let orgUrl: string;
+let isOnPrem = false;
+
+if (orgName.startsWith("http://") || orgName.startsWith("https://")) {
+  // User passed a URL — determine if it's a cloud URL or on-prem
+  const parsed = new URL(orgName);
+  const hostname = parsed.hostname.toLowerCase();
+
+  if (hostname === "dev.azure.com" || hostname.endsWith(".visualstudio.com")) {
+    // Cloud URL — extract org name from path
+    const pathSegments = parsed.pathname.split("/").filter(Boolean);
+    orgUrl = `https://dev.azure.com/${pathSegments[0]}`;
+  } else {
+    // On-prem URL
+    if (parsed.protocol === "http:" && !argv.allowHttp) {
+      logger.error("HTTP URLs are not allowed without --allow-http flag. Credentials would travel in cleartext.");
+      process.exit(1);
+    }
+    orgUrl = orgName.replace(/\/$/, ""); // strip trailing slash
+    isOnPrem = true;
+  }
+} else {
+  // Plain org name — cloud mode
+  orgUrl = "https://dev.azure.com/" + orgName;
+}
+
+// TLS and HTTP warnings
+if (argv.allowUntrustedCert) {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+  logger.warn("WARNING: TLS certificate verification is disabled (--allow-untrusted-cert). This is insecure and affects all connections in this process.");
+}
+if (argv.allowHttp && argv.authentication === "pat") {
+  logger.warn("WARNING: Using PAT authentication over HTTP. Credentials will travel in cleartext over the network.");
+}
+
+export { orgUrl, isOnPrem };
 
 const domainsManager = new DomainsManager(argv.domains);
 export const enabledDomains = domainsManager.getEnabledDomains();
@@ -83,6 +130,7 @@ async function main() {
   logger.info("Starting Azure DevOps MCP Server", {
     organization: orgName,
     organizationUrl: orgUrl,
+    mode: isOnPrem ? "on-prem" : "cloud",
     authentication: argv.authentication,
     tenant: argv.tenant,
     domains: argv.domains,
@@ -105,7 +153,7 @@ async function main() {
   server.server.oninitialized = () => {
     userAgentComposer.appendMcpClientInfo(server.server.getClientVersion());
   };
-  const tenantId = (await getOrgTenant(orgName)) ?? argv.tenant;
+  const tenantId = isOnPrem ? argv.tenant : ((await getOrgTenant(orgName)) ?? argv.tenant);
   const authenticator = createAuthenticator(argv.authentication, tenantId);
 
   if (argv.authentication === "pat") {
@@ -129,6 +177,37 @@ async function main() {
   // configurePrompts(server);
 
   configureAllTools(server, authenticator, getAzureDevOpsClient(authenticator, userAgentComposer, argv.authentication), () => userAgentComposer.userAgent, enabledDomains);
+
+  // On-prem startup connection check — fail fast on misconfiguration
+  if (isOnPrem) {
+    try {
+      const checkUrl = `${orgUrl}/_apis/connectionData`;
+      const token = await authenticator();
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        "User-Agent": userAgentComposer.userAgent,
+      };
+      if (argv.authentication === "pat") {
+        headers["Authorization"] = `Basic ${token}`;
+      } else {
+        headers["Authorization"] = `Bearer ${token}`;
+      }
+      const response = await fetch(checkUrl, { method: "GET", headers });
+      if (!response.ok) {
+        logger.error(`On-prem connection check failed: HTTP ${response.status} ${response.statusText} from ${checkUrl}`);
+        process.exit(1);
+      }
+      const data = (await response.json()) as { deploymentType?: string; serverVersion?: string };
+      logger.info("On-prem connection verified", {
+        serverUrl: orgUrl,
+        serverVersion: data.serverVersion ?? "unknown",
+        deploymentType: data.deploymentType ?? "unknown",
+      });
+    } catch (error) {
+      logger.error("On-prem connection check failed — cannot reach server. Verify the URL is correct and the server is reachable.", error);
+      process.exit(1);
+    }
+  }
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

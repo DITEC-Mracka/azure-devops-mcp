@@ -115,7 +115,7 @@ describe("auth functions", () => {
 
       const result = await searchIdentities("john.doe@example.com", tokenProvider, connectionProvider, userAgentProvider);
 
-      expect(global.fetch).toHaveBeenCalledWith("https://vssps.dev.azure.com/test-org/_apis/identities?api-version=7.2-preview.1&searchFilter=General&filterValue=john.doe%40example.com", {
+      expect(global.fetch).toHaveBeenCalledWith("https://dev.azure.com/test-org/_apis/identities?api-version=7.2-preview.1&searchFilter=General&filterValue=john.doe%40example.com", {
         headers: {
           "Authorization": "Bearer fake-token",
           "Content-Type": "application/json",
@@ -158,7 +158,7 @@ describe("auth functions", () => {
       await searchIdentities("user with spaces@example.com", tokenProvider, connectionProvider, userAgentProvider);
 
       expect(global.fetch).toHaveBeenCalledWith(
-        "https://vssps.dev.azure.com/test-org/_apis/identities?api-version=7.2-preview.1&searchFilter=General&filterValue=user+with+spaces%40example.com",
+        "https://dev.azure.com/test-org/_apis/identities?api-version=7.2-preview.1&searchFilter=General&filterValue=user+with+spaces%40example.com",
         expect.any(Object)
       );
     });
@@ -187,7 +187,7 @@ describe("auth functions", () => {
 
       const result = await getUserIdFromEmail("john.doe@example.com", tokenProvider, connectionProvider, userAgentProvider);
 
-      expect(global.fetch).toHaveBeenCalledWith("https://vssps.dev.azure.com/test-org/_apis/identities?api-version=7.2-preview.1&searchFilter=General&filterValue=john.doe%40example.com", {
+      expect(global.fetch).toHaveBeenCalledWith("https://dev.azure.com/test-org/_apis/identities?api-version=7.2-preview.1&searchFilter=General&filterValue=john.doe%40example.com", {
         headers: {
           "Authorization": "Bearer fake-token",
           "Content-Type": "application/json",
@@ -315,7 +315,7 @@ describe("auth functions", () => {
 
       const result = await getUserIdFromEmail("john.doe", tokenProvider, connectionProvider, userAgentProvider);
 
-      expect(global.fetch).toHaveBeenCalledWith("https://vssps.dev.azure.com/test-org/_apis/identities?api-version=7.2-preview.1&searchFilter=General&filterValue=john.doe", expect.any(Object));
+      expect(global.fetch).toHaveBeenCalledWith("https://dev.azure.com/test-org/_apis/identities?api-version=7.2-preview.1&searchFilter=General&filterValue=john.doe", expect.any(Object));
 
       expect(result).toBe("user1-id");
     });
