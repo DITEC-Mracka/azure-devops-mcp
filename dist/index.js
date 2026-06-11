@@ -225,7 +225,10 @@ async function main() {
                         break;
                     // Extract only the Negotiate token from potentially multi-scheme header
                     // e.g. "Bearer, Basic realm=..., Negotiate YII..., NTLM" → "Negotiate YII..."
-                    const negotiatePart = serverAuth.split(",").map((s) => s.trim()).find((s) => s.toLowerCase().startsWith("negotiate "));
+                    const negotiatePart = serverAuth
+                        .split(",")
+                        .map((s) => s.trim())
+                        .find((s) => s.toLowerCase().startsWith("negotiate "));
                     if (!negotiatePart)
                         break;
                     const responseHeader = sso.createAuthResponseHeader(negotiatePart);
