@@ -19,13 +19,20 @@ import { logger } from "./logger.js";
 export class SspiRequestHandler implements IRequestHandler {
   private serverUrl: string;
   private winSsoModule: typeof import("win-sso") | null = null;
-  private keepAliveAgent: https.Agent | http.Agent;
+  private isHttps: boolean;
 
   constructor(serverUrl: string) {
     this.serverUrl = serverUrl;
-    const isHttps = serverUrl.startsWith("https");
-    this.keepAliveAgent = isHttps
-      ? new https.Agent({ keepAlive: true, maxSockets: 1, rejectUnauthorized: process.env.NODE_TLS_REJECT_UNAUTHORIZED !== "0" ? true : false })
+    this.isHttps = serverUrl.startsWith("https");
+  }
+
+  /**
+   * Creates a fresh keep-alive agent for a single SSPI handshake.
+   * Each handshake gets its own agent to avoid stale/closed sockets from prior calls.
+   */
+  private createHandshakeAgent(): https.Agent | http.Agent {
+    return this.isHttps
+      ? new https.Agent({ keepAlive: true, maxSockets: 1, rejectUnauthorized: process.env.NODE_TLS_REJECT_UNAUTHORIZED !== "0" })
       : new http.Agent({ keepAlive: true, maxSockets: 1 });
   }
 
@@ -59,7 +66,13 @@ export class SspiRequestHandler implements IRequestHandler {
   /**
    * Performs a raw HTTP(S) request using the keep-alive agent to maintain TCP connection.
    */
-  private rawRequest(url: URL, method: string, headers: Record<string, string>, body?: string): Promise<{ statusCode: number; headers: http.IncomingHttpHeaders; body: string }> {
+  private rawRequest(
+    url: URL,
+    method: string,
+    headers: Record<string, string>,
+    body: string | undefined,
+    agent: http.Agent | https.Agent
+  ): Promise<{ statusCode: number; headers: http.IncomingHttpHeaders; body: string }> {
     return new Promise((resolve, reject) => {
       const options: https.RequestOptions = {
         hostname: url.hostname,
@@ -67,7 +80,7 @@ export class SspiRequestHandler implements IRequestHandler {
         path: url.pathname + url.search,
         method,
         headers: { ...headers, Connection: "keep-alive" },
-        agent: this.keepAliveAgent,
+        agent,
       };
 
       const transport = url.protocol === "https:" ? https : http;
@@ -113,17 +126,19 @@ export class SspiRequestHandler implements IRequestHandler {
       }
     }
 
+    // Fresh agent per handshake — avoids stale sockets from prior calls (server may close after idle)
+    const agent = this.createHandshakeAgent();
     let sso: InstanceType<typeof winSso.WinSso> | undefined;
     try {
       sso = new winSso.WinSso("Negotiate", targetHost, undefined, undefined);
 
       // NTLM requires the entire handshake on the SAME TCP socket.
-      // typed-rest-client already got a 401 on ITS socket, but we use our own keepAliveAgent.
+      // typed-rest-client already got a 401 on ITS socket, but we use our own fresh agent.
       // We must first send an unauthenticated probe on OUR socket to establish the connection,
       // then do the full Negotiate handshake on that same socket.
       const probeHeaders = { ...headers };
       delete probeHeaders["Authorization"];
-      let response = await this.rawRequest(requestUrl, method, probeHeaders, bodyStr);
+      let response = await this.rawRequest(requestUrl, method, probeHeaders, bodyStr, agent);
       logger.debug(`SSPI probe on keepAlive socket: status=${response.statusCode}`);
 
       if (response.statusCode !== 401) {
@@ -137,11 +152,11 @@ export class SspiRequestHandler implements IRequestHandler {
         return { message: incomingMessage, readBody: () => Promise.resolve(responseBody) } as IHttpClientResponse;
       }
 
-      // Now send Type1 token on the SAME socket (keepAlive ensures reuse)
+      // Now send Type1 token on the SAME socket (fresh agent ensures reuse)
       const authRequestHeader = sso.createAuthRequestHeader();
       headers["Authorization"] = authRequestHeader;
 
-      response = await this.rawRequest(requestUrl, method, headers, bodyStr);
+      response = await this.rawRequest(requestUrl, method, headers, bodyStr, agent);
       logger.debug(`SSPI handshake round 1 (Type1): status=${response.statusCode}`);
 
       // Multi-round-trip loop (NTLM requires Type1 → Type2 → Type3)
@@ -170,7 +185,7 @@ export class SspiRequestHandler implements IRequestHandler {
         }
 
         headers["Authorization"] = responseHeader;
-        response = await this.rawRequest(requestUrl, method, headers, bodyStr);
+        response = await this.rawRequest(requestUrl, method, headers, bodyStr, agent);
         logger.debug(`SSPI handshake round ${rounds + 2}: status=${response.statusCode}`);
         rounds++;
       }
@@ -209,6 +224,7 @@ export class SspiRequestHandler implements IRequestHandler {
           // Ignore cleanup errors
         }
       }
+      agent.destroy();
     }
   }
 }
