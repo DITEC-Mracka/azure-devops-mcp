@@ -113,6 +113,10 @@ describe("SspiRequestHandler", () => {
         message: {
           statusCode: 401,
           headers: { "www-authenticate": "Negotiate TlRMTVNTUAACAAAA" },
+          resume: jest.fn(),
+          on: jest.fn((event: string, cb: () => void) => {
+            cb();
+          }),
         },
       };
       const successResponse = {
@@ -136,6 +140,10 @@ describe("SspiRequestHandler", () => {
         message: {
           statusCode: 401,
           headers: { "www-authenticate": "Negotiate blob" },
+          resume: jest.fn(),
+          on: jest.fn((event: string, cb: () => void) => {
+            cb();
+          }),
         },
       };
       const mockHttpClient = {
