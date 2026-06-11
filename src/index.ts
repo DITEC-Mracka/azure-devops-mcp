@@ -17,6 +17,7 @@ import { configureAllTools } from "./tools.js";
 import { UserAgentComposer } from "./useragent.js";
 import { packageVersion } from "./version.js";
 import { DomainsManager } from "./shared/domains.js";
+import { resolveOrgUrl } from "./utils.js";
 
 function isGitHubCodespaceEnv(): boolean {
   return process.env.CODESPACES === "true" && !!process.env.CODESPACE_NAME;
@@ -74,27 +75,13 @@ export const orgName = argv.organization as string;
 let orgUrl: string;
 let isOnPrem = false;
 
-if (orgName.startsWith("http://") || orgName.startsWith("https://")) {
-  // User passed a URL — determine if it's a cloud URL or on-prem
-  const parsed = new URL(orgName);
-  const hostname = parsed.hostname.toLowerCase();
-
-  if (hostname === "dev.azure.com" || hostname.endsWith(".visualstudio.com")) {
-    // Cloud URL — extract org name from path
-    const pathSegments = parsed.pathname.split("/").filter(Boolean);
-    orgUrl = `https://dev.azure.com/${pathSegments[0]}`;
-  } else {
-    // On-prem URL
-    if (parsed.protocol === "http:" && !argv.allowHttp) {
-      logger.error("HTTP URLs are not allowed without --allow-http flag. Credentials would travel in cleartext.");
-      process.exit(1);
-    }
-    orgUrl = orgName.replace(/\/$/, ""); // strip trailing slash
-    isOnPrem = true;
-  }
-} else {
-  // Plain org name — cloud mode
-  orgUrl = "https://dev.azure.com/" + orgName;
+try {
+  const resolved = resolveOrgUrl(orgName, argv.allowHttp as boolean);
+  orgUrl = resolved.orgUrl;
+  isOnPrem = resolved.isOnPrem;
+} catch (error) {
+  logger.error((error as Error).message);
+  process.exit(1);
 }
 
 // TLS and HTTP warnings

@@ -2,7 +2,7 @@
 // Licensed under the MIT License.
 
 import { AlertType, AlertValidityStatus, Confidence, Severity, State } from "azure-devops-node-api/interfaces/AlertInterfaces";
-import { createEnumMapping, encodeFormattedValue, extractAdoStreamError, getEnumKeys, mapStringArrayToEnum, mapStringToEnum, safeEnumConvert } from "../../src/utils";
+import { createEnumMapping, encodeFormattedValue, extractAdoStreamError, getEnumKeys, mapStringArrayToEnum, mapStringToEnum, resolveOrgUrl, safeEnumConvert } from "../../src/utils";
 
 describe("utils", () => {
   describe("createEnumMapping", () => {
@@ -520,6 +520,47 @@ describe("encodeFormattedValue", () => {
       const twice = encodeFormattedValue(once, "Markdown");
       expect(once).toBe("Already &lt;tag&gt; plus &lt;new&gt; and $cash");
       expect(twice).toBe(once);
+    });
+  });
+
+  describe("resolveOrgUrl", () => {
+    it("should resolve plain org name to cloud URL", () => {
+      const result = resolveOrgUrl("myorg");
+      expect(result).toEqual({ orgUrl: "https://dev.azure.com/myorg", isOnPrem: false });
+    });
+
+    it("should detect https://dev.azure.com/myorg as cloud", () => {
+      const result = resolveOrgUrl("https://dev.azure.com/myorg");
+      expect(result).toEqual({ orgUrl: "https://dev.azure.com/myorg", isOnPrem: false });
+    });
+
+    it("should detect https://myorg.visualstudio.com as cloud", () => {
+      const result = resolveOrgUrl("https://myorg.visualstudio.com");
+      expect(result).toEqual({ orgUrl: "https://dev.azure.com/myorg", isOnPrem: false });
+    });
+
+    it("should detect on-prem URL", () => {
+      const result = resolveOrgUrl("https://dev-tfs/tfs/internal_projects");
+      expect(result).toEqual({ orgUrl: "https://dev-tfs/tfs/internal_projects", isOnPrem: true });
+    });
+
+    it("should strip trailing slash from on-prem URL", () => {
+      const result = resolveOrgUrl("https://server/tfs/collection/");
+      expect(result).toEqual({ orgUrl: "https://server/tfs/collection", isOnPrem: true });
+    });
+
+    it("should throw for http:// without allowHttp", () => {
+      expect(() => resolveOrgUrl("http://server/tfs/col")).toThrow("HTTP URLs are not allowed");
+    });
+
+    it("should allow http:// with allowHttp=true", () => {
+      const result = resolveOrgUrl("http://server/tfs/col", true);
+      expect(result).toEqual({ orgUrl: "http://server/tfs/col", isOnPrem: true });
+    });
+
+    it("should extract org from dev.azure.com path", () => {
+      const result = resolveOrgUrl("https://dev.azure.com/myorg/myproject");
+      expect(result).toEqual({ orgUrl: "https://dev.azure.com/myorg", isOnPrem: false });
     });
   });
 });

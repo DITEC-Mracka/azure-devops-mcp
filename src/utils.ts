@@ -5,6 +5,43 @@ export const apiVersion = "7.2-preview.1";
 export const batchApiVersion = "5.0";
 export const markdownCommentsApiVersion = "7.2-preview.4";
 
+export interface OrgResolution {
+  orgUrl: string;
+  isOnPrem: boolean;
+}
+
+/**
+ * Resolves the organization argument to a URL and mode (cloud vs on-prem).
+ * - Plain org name → cloud mode, https://dev.azure.com/{org}
+ * - https://dev.azure.com/myorg or *.visualstudio.com → cloud mode
+ * - Any other URL → on-prem mode
+ * - http:// URLs require allowHttp=true
+ */
+export function resolveOrgUrl(organization: string, allowHttp = false): OrgResolution {
+  if (organization.startsWith("http://") || organization.startsWith("https://")) {
+    const parsed = new URL(organization);
+    const hostname = parsed.hostname.toLowerCase();
+
+    if (hostname === "dev.azure.com" || hostname.endsWith(".visualstudio.com")) {
+      let extractedOrg: string;
+      if (hostname === "dev.azure.com") {
+        const pathSegments = parsed.pathname.split("/").filter(Boolean);
+        extractedOrg = pathSegments[0];
+      } else {
+        // myorg.visualstudio.com — org is the subdomain
+        extractedOrg = hostname.replace(".visualstudio.com", "");
+      }
+      return { orgUrl: `https://dev.azure.com/${extractedOrg}`, isOnPrem: false };
+    } else {
+      if (parsed.protocol === "http:" && !allowHttp) {
+        throw new Error("HTTP URLs are not allowed without --allow-http flag. Credentials would travel in cleartext.");
+      }
+      return { orgUrl: organization.replace(/\/$/, ""), isOnPrem: true };
+    }
+  }
+  return { orgUrl: "https://dev.azure.com/" + organization, isOnPrem: false };
+}
+
 export function createEnumMapping<T extends Record<string, string | number>>(enumObject: T): Record<string, T[keyof T]> {
   const mapping: Record<string, T[keyof T]> = {};
   for (const [key, value] of Object.entries(enumObject)) {
