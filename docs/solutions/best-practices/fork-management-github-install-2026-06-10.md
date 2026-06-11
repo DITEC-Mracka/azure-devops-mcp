@@ -78,6 +78,7 @@ git push origin ditec                         # push custom branch
 ```
 
 **Why this layout:**
+
 - "Sync fork" on GitHub only touches `main` → never corrupts our custom code
 - `main` is always a clean upstream mirror → trivial rebase source
 - Colleagues can safely click "Sync fork" without breaking anything
@@ -128,31 +129,35 @@ Note the `#ditec` suffix — without it, npm would fetch the default branch. Sin
 ## Examples
 
 **Before (fails):**
+
 ```
 $ npx github:DITEC-Mracka/azure-devops-mcp#ditec myorg
 > npm ERR! sh: tsc: command not found
 ```
 
 **After (works):**
+
 ```
 $ npx github:DITEC-Mracka/azure-devops-mcp#ditec myorg
 > Azure DevOps MCP Server started...
 ```
 
 **Only 3 devDependencies are needed for build:**
+
 - `typescript` — the compiler
 - `@types/node` — Node.js type definitions
 - `shx` — cross-platform `chmod +x`
 
 ## Avoiding "Sync fork" accidents
 
-| Situation | Impact |
-|-----------|--------|
-| Someone clicks "Sync fork" | ✅ Safe — only updates `main` (upstream mirror) |
-| Someone merges `main` into `ditec` on GitHub | ⚠️ Creates merge commit — fix with local rebase |
-| Upstream changes same files we changed | Rebase shows conflicts on `ditec` — resolve manually |
+| Situation                                    | Impact                                               |
+| -------------------------------------------- | ---------------------------------------------------- |
+| Someone clicks "Sync fork"                   | ✅ Safe — only updates `main` (upstream mirror)      |
+| Someone merges `main` into `ditec` on GitHub | ⚠️ Creates merge commit — fix with local rebase      |
+| Upstream changes same files we changed       | Rebase shows conflicts on `ditec` — resolve manually |
 
 **Recovery if someone merges main into ditec on GitHub:**
+
 ```bash
 git fetch origin
 git checkout ditec

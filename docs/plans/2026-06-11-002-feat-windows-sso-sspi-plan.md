@@ -42,6 +42,7 @@ Milestone 1 delivers on-prem connectivity via PAT. But PATs expire, need manual 
 **Goal:** Add the package without breaking cross-platform installs.
 
 **Files:**
+
 - `package.json` (modify — add to `optionalDependencies`)
 
 **Approach:**
@@ -51,6 +52,7 @@ Milestone 1 delivers on-prem connectivity via PAT. But PATs expire, need manual 
 3. Run `npm install` on Windows to verify the prebuilt binary downloads correctly
 
 **Test scenarios:**
+
 - `npm install` on Windows → `win-sso` installs with prebuilt binary
 - `npm install` on Linux/macOS → proceeds without error (optional dep missing is OK)
 
@@ -61,6 +63,7 @@ Milestone 1 delivers on-prem connectivity via PAT. But PATs expire, need manual 
 **Goal:** Create a custom `IRequestHandler` that performs SSPI Negotiate/NTLM authentication with EPA support.
 
 **Files:**
+
 - `src/sspi-handler.ts` (create)
 
 **Approach:**
@@ -84,6 +87,7 @@ Milestone 1 delivers on-prem connectivity via PAT. But PATs expire, need manual 
 7. Export a factory function `createSspiHandler(serverUrl: string)` that handles the TLS cert extraction and returns the handler
 
 **Test scenarios:**
+
 - Successful Negotiate auth with single round-trip (Kerberos)
 - Successful NTLM auth with 3 round-trips (Type1 → Type2 → Type3)
 - EPA: channel binding token included when connecting over HTTPS
@@ -98,12 +102,14 @@ Milestone 1 delivers on-prem connectivity via PAT. But PATs expire, need manual 
 **Goal:** Add `sspi` to the auth type switch, implement auto-selection logic, ensure fetch interceptor exclusivity.
 
 **Files:**
+
 - `src/auth.ts` (modify)
 - `src/index.ts` (modify)
 
 **Approach:**
 
 **`src/auth.ts`:**
+
 1. Add `"sspi"` to the `choices` array in yargs authentication option
 2. Add a new case in `createAuthenticator` switch:
    ```
@@ -115,6 +121,7 @@ Milestone 1 delivers on-prem connectivity via PAT. But PATs expire, need manual 
    (The SSPI handler is attached at the WebApi level, not the token provider level)
 
 **`src/index.ts`:**
+
 1. Add auto-selection logic after URL detection:
    - If on-prem mode AND `process.platform === "win32"` AND user didn't explicitly set `--authentication` → override to `"sspi"`
    - Log: "On-prem URL detected on Windows — using SSPI authentication (override with --authentication pat)"
@@ -127,6 +134,7 @@ Milestone 1 delivers on-prem connectivity via PAT. But PATs expire, need manual 
 3. Platform guard: if `sspi` selected but `process.platform !== "win32"` → exit with clear error
 
 **Test scenarios:**
+
 - On-prem + Windows + no explicit auth → auto-selects `sspi`, logs message
 - On-prem + Windows + `--authentication pat` → uses PAT, no SSPI
 - On-prem + Linux + auto-detect → does NOT auto-select sspi (stays at requiring explicit auth)
@@ -141,6 +149,7 @@ Milestone 1 delivers on-prem connectivity via PAT. But PATs expire, need manual 
 **Goal:** Ensure SSPI failures produce actionable errors, not cryptic crashes.
 
 **Files:**
+
 - `src/sspi-handler.ts` (modify)
 - `src/index.ts` (modify)
 
@@ -156,6 +165,7 @@ Milestone 1 delivers on-prem connectivity via PAT. But PATs expire, need manual 
 3. Handle the case where `win-sso` package is present but SSPI context creation fails (e.g., machine not joined to domain) — this is different from package-not-installed
 
 **Test scenarios:**
+
 - Machine not domain-joined → "SSPI failed: not joined to a domain. Use --authentication pat."
 - Server rejects auth (wrong SPN, disabled Negotiate) → clear error with server response
 - `win-sso` DLL load failure → "SSPI unavailable on this system. Use --authentication pat."
@@ -168,6 +178,7 @@ Milestone 1 delivers on-prem connectivity via PAT. But PATs expire, need manual 
 **Goal:** Unit tests for SSPI handler, integration guidance, README update.
 
 **Files:**
+
 - `test/src/sspi-handler.test.ts` (create)
 - `test/src/tools/auth.test.ts` (modify — add sspi cases)
 - `README.md` (modify — add Windows SSO section)
@@ -189,6 +200,7 @@ Milestone 1 delivers on-prem connectivity via PAT. But PATs expire, need manual 
    - Mention `NODE_EXTRA_CA_CERTS` still applies (TLS cert needed for EPA too)
 
 **Test scenarios:**
+
 - All existing tests pass (SSPI doesn't affect cloud/PAT paths)
 - Mock-based SSPI handshake tests pass on all platforms
 - Auto-selection logic tests cover all platform × auth × URL combinations

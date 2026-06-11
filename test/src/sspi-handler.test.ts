@@ -83,7 +83,7 @@ describe("SspiRequestHandler", () => {
       const response = {
         message: {
           statusCode: 401,
-          headers: { "www-authenticate": "Basic realm=\"server\"" },
+          headers: { "www-authenticate": 'Basic realm="server"' },
         },
       };
       expect(handler.canHandleAuthentication(response as any)).toBe(false);
@@ -119,9 +119,7 @@ describe("SspiRequestHandler", () => {
         message: { statusCode: 200, headers: {} },
       };
       const mockHttpClient = {
-        requestRaw: jest.fn()
-          .mockResolvedValueOnce(challengeResponse)
-          .mockResolvedValueOnce(successResponse),
+        requestRaw: jest.fn().mockResolvedValueOnce(challengeResponse).mockResolvedValueOnce(successResponse),
       };
       const mockRequestInfo = {
         options: { headers: {} },
@@ -148,9 +146,7 @@ describe("SspiRequestHandler", () => {
         parsedUrl: { hostname: "dev-tfs" },
       };
 
-      await expect(
-        handler.handleAuthentication(mockHttpClient as any, mockRequestInfo as any, "")
-      ).rejects.toThrow("SSPI authentication failed after multiple rounds");
+      await expect(handler.handleAuthentication(mockHttpClient as any, mockRequestInfo as any, "")).rejects.toThrow("SSPI authentication failed after multiple rounds");
     });
   });
 });
@@ -164,9 +160,7 @@ describe("createSspiHandler", () => {
 
   it("should reject on non-Windows platforms", async () => {
     Object.defineProperty(process, "platform", { value: "linux" });
-    await expect(createSspiHandler("https://server/tfs/col")).rejects.toThrow(
-      "SSPI authentication is only available on Windows"
-    );
+    await expect(createSspiHandler("https://server/tfs/col")).rejects.toThrow("SSPI authentication is only available on Windows");
   });
 
   it("should create handler on Windows", async () => {
