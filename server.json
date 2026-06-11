@@ -1,33 +1,11 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json",
-  "name": "com.microsoft/azure-devops",
-  "description": "The MCP server for Azure DevOps, bringing the power of Azure DevOps directly to your agents.",
+  "name": "ditec/azure-devops-onprem",
+  "description": "MCP server for Azure DevOps Server (on-premise) with Windows integrated auth support.",
   "version": "2.4.0",
-  "title": "Azure DevOps",
-  "remotes": [
-    {
-      "type": "streamable-http",
-      "url": "https://mcp.dev.azure.com/{organization}",
-      "variables": {
-        "organization": {
-          "description": "Your Azure DevOps organization identifier (e.g., 'contoso', 'fabrikam')",
-          "isRequired": false
-        }
-      }
-    }
-  ],
-  "packages": [
-    {
-      "registryType": "npm",
-      "identifier": "@microsoft/azure-devops",
-      "version": "2.4.0",
-      "transport": {
-        "type": "stdio"
-      }
-    }
-  ],
+  "title": "Azure DevOps On-Prem",
   "repository": {
-    "url": "https://github.com/microsoft/azure-devops-mcp",
+    "url": "https://github.com/DITEC-Mracka/azure-devops-onprem",
     "source": "github"
   },
   "websiteUrl": "https://learn.microsoft.com/en-us/azure/devops/mcp-server/mcp-server-overview"
