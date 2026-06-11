@@ -117,12 +117,32 @@ export class SspiRequestHandler implements IRequestHandler {
     try {
       sso = new winSso.WinSso("Negotiate", targetHost, undefined, undefined);
 
-      // Round 1: Send initial Negotiate token
+      // NTLM requires the entire handshake on the SAME TCP socket.
+      // typed-rest-client already got a 401 on ITS socket, but we use our own keepAliveAgent.
+      // We must first send an unauthenticated probe on OUR socket to establish the connection,
+      // then do the full Negotiate handshake on that same socket.
+      const probeHeaders = { ...headers };
+      delete probeHeaders["Authorization"];
+      let response = await this.rawRequest(requestUrl, method, probeHeaders, bodyStr);
+      logger.debug(`SSPI probe on keepAlive socket: status=${response.statusCode}`);
+
+      if (response.statusCode !== 401) {
+        // Server didn't challenge — return as-is (unlikely but safe)
+        const incomingMessage = new http.IncomingMessage(new net.Socket());
+        incomingMessage.statusCode = response.statusCode;
+        incomingMessage.headers = response.headers;
+        incomingMessage.push(response.body);
+        incomingMessage.push(null);
+        const responseBody = response.body;
+        return { message: incomingMessage, readBody: () => Promise.resolve(responseBody) } as IHttpClientResponse;
+      }
+
+      // Now send Type1 token on the SAME socket (keepAlive ensures reuse)
       const authRequestHeader = sso.createAuthRequestHeader();
       headers["Authorization"] = authRequestHeader;
 
-      let response = await this.rawRequest(requestUrl, method, headers, bodyStr);
-      logger.debug(`SSPI handshake round 1: status=${response.statusCode}`);
+      response = await this.rawRequest(requestUrl, method, headers, bodyStr);
+      logger.debug(`SSPI handshake round 1 (Type1): status=${response.statusCode}`);
 
       // Multi-round-trip loop (NTLM requires Type1 → Type2 → Type3)
       let rounds = 0;
