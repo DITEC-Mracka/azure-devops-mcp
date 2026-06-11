@@ -27,19 +27,15 @@ export class SspiRequestHandler implements IRequestHandler {
       this.winSsoModule = await import("win-sso");
       return this.winSsoModule;
     } catch {
-      throw new Error(
-        "SSPI authentication requires Windows and the win-sso package. " +
-          "Use --authentication pat as a cross-platform alternative."
-      );
+      throw new Error("SSPI authentication requires Windows and the win-sso package. " + "Use --authentication pat as a cross-platform alternative.");
     }
   }
 
   prepareRequest(options: http.RequestOptions): void {
     // No-op — authentication is handled via canHandleAuthentication/handleAuthentication cycle
     // Keep connection alive for multi-round-trip NTLM handshake
-    if (options.headers) {
-      (options.headers as Record<string, string>)["Connection"] = "keep-alive";
-    }
+    options.headers = options.headers ?? {};
+    (options.headers as Record<string, string>)["Connection"] = "keep-alive";
   }
 
   canHandleAuthentication(response: IHttpClientResponse): boolean {
@@ -54,10 +50,7 @@ export class SspiRequestHandler implements IRequestHandler {
     const winSso = await this.loadWinSso();
 
     if (!winSso.osSupported()) {
-      throw new Error(
-        "SSPI authentication is only available on Windows. " +
-          "Use --authentication pat on other platforms."
-      );
+      throw new Error("SSPI authentication is only available on Windows. " + "Use --authentication pat on other platforms.");
     }
 
     // Extract target hostname for SPN
@@ -105,10 +98,7 @@ export class SspiRequestHandler implements IRequestHandler {
       }
 
       if (response.message.statusCode === 401) {
-        throw new Error(
-          "SSPI authentication failed after multiple rounds. " +
-            "Verify the server accepts Negotiate/NTLM and the machine is domain-joined."
-        );
+        throw new Error("SSPI authentication failed after multiple rounds. " + "Verify the server accepts Negotiate/NTLM and the machine is domain-joined.");
       }
 
       return response;
@@ -118,11 +108,7 @@ export class SspiRequestHandler implements IRequestHandler {
       }
       // Wrap win-sso errors with context
       const msg = error instanceof Error ? error.message : String(error);
-      throw new Error(
-        `SSPI authentication failed: ${msg}. ` +
-          "Verify the machine is domain-joined and has network access to the server. " +
-          "Use --authentication pat as a fallback."
-      );
+      throw new Error(`SSPI authentication failed: ${msg}. ` + "Verify the machine is domain-joined and has network access to the server. " + "Use --authentication pat as a fallback.");
     } finally {
       if (sso) {
         try {
@@ -142,10 +128,7 @@ export class SspiRequestHandler implements IRequestHandler {
 export async function createSspiHandler(serverUrl: string): Promise<SspiRequestHandler> {
   // Validate platform early
   if (process.platform !== "win32") {
-    throw new Error(
-      "SSPI authentication is only available on Windows. " +
-        "Use --authentication pat on other platforms."
-    );
+    throw new Error("SSPI authentication is only available on Windows. " + "Use --authentication pat on other platforms.");
   }
 
   // Validate win-sso is loadable
@@ -157,10 +140,7 @@ export async function createSspiHandler(serverUrl: string): Promise<SspiRequestH
     logger.debug("SSPI: win-sso loaded successfully, platform supported");
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      `SSPI authentication unavailable: ${msg}. ` +
-        "Use --authentication pat as a fallback."
-    );
+    throw new Error(`SSPI authentication unavailable: ${msg}. ` + "Use --authentication pat as a fallback.");
   }
 
   return new SspiRequestHandler(serverUrl);

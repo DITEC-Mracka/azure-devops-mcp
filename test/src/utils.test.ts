@@ -562,5 +562,18 @@ describe("encodeFormattedValue", () => {
       const result = resolveOrgUrl("https://dev.azure.com/myorg/myproject");
       expect(result).toEqual({ orgUrl: "https://dev.azure.com/myorg", isOnPrem: false });
     });
+
+    it("should throw for bare https://dev.azure.com/ without org", () => {
+      expect(() => resolveOrgUrl("https://dev.azure.com/")).toThrow("Cannot extract organization name");
+    });
+
+    it("should throw for bare https://dev.azure.com without path", () => {
+      expect(() => resolveOrgUrl("https://dev.azure.com")).toThrow("Cannot extract organization name");
+    });
+
+    it("should treat bare https://visualstudio.com as on-prem (no subdomain)", () => {
+      const result = resolveOrgUrl("https://visualstudio.com/foo");
+      expect(result).toEqual({ orgUrl: "https://visualstudio.com/foo", isOnPrem: true });
+    });
   });
 });

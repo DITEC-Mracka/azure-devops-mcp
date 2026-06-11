@@ -24,6 +24,9 @@ export function resolveOrgUrl(organization, allowHttp = false) {
                 // myorg.visualstudio.com — org is the subdomain
                 extractedOrg = hostname.replace(".visualstudio.com", "");
             }
+            if (!extractedOrg || extractedOrg === hostname) {
+                throw new Error(`Cannot extract organization name from URL: ${organization}`);
+            }
             return { orgUrl: `https://dev.azure.com/${extractedOrg}`, isOnPrem: false };
         }
         else {

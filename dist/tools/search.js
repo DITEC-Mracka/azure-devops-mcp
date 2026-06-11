@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 import { z } from "zod";
+import { isOnPrem, orgName } from "../index.js";
 import { apiVersion } from "../utils.js";
 import { VersionControlRecursionType } from "azure-devops-node-api/interfaces/GitInterfaces.js";
 const SEARCH_TOOLS = {
@@ -24,7 +25,8 @@ function configureSearchTools(server, tokenProvider, connectionProvider, userAge
     }, async ({ searchText, project, repository, path, branch, includeFacets, skip, top }) => {
         const accessToken = await tokenProvider();
         const connection = await connectionProvider();
-        const url = `${connection.serverUrl}/_apis/search/codesearchresults?api-version=${apiVersion}`;
+        const searchBase = isOnPrem ? connection.serverUrl : `https://almsearch.dev.azure.com/${orgName}`;
+        const url = `${searchBase}/_apis/search/codesearchresults?api-version=${apiVersion}`;
         const requestBody = {
             searchText,
             includeFacets,
@@ -76,7 +78,8 @@ function configureSearchTools(server, tokenProvider, connectionProvider, userAge
     }, async ({ searchText, project, wiki, includeFacets, skip, top }) => {
         const accessToken = await tokenProvider();
         const connection = await connectionProvider();
-        const url = `${connection.serverUrl}/_apis/search/wikisearchresults?api-version=${apiVersion}`;
+        const searchBase = isOnPrem ? connection.serverUrl : `https://almsearch.dev.azure.com/${orgName}`;
+        const url = `${searchBase}/_apis/search/wikisearchresults?api-version=${apiVersion}`;
         const requestBody = {
             searchText,
             includeFacets,
@@ -124,7 +127,8 @@ function configureSearchTools(server, tokenProvider, connectionProvider, userAge
     }, async ({ searchText, project, areaPath, workItemType, state, assignedTo, includeFacets, skip, top }) => {
         const accessToken = await tokenProvider();
         const connection = await connectionProvider();
-        const url = `${connection.serverUrl}/_apis/search/workitemsearchresults?api-version=${apiVersion}`;
+        const searchBase = isOnPrem ? connection.serverUrl : `https://almsearch.dev.azure.com/${orgName}`;
+        const url = `${searchBase}/_apis/search/workitemsearchresults?api-version=${apiVersion}`;
         const requestBody = {
             searchText,
             includeFacets,

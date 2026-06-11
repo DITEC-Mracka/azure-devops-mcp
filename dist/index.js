@@ -76,19 +76,19 @@ catch (error) {
     logger.error(error.message);
     process.exit(1);
 }
-// TLS and HTTP warnings
+// TLS certificate override
 if (argv.allowUntrustedCert) {
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
     logger.warn("WARNING: TLS certificate verification is disabled (--allow-untrusted-cert). This is insecure and affects all connections in this process.");
-}
-if (argv.allowHttp && argv.authentication === "pat") {
-    logger.warn("WARNING: Using PAT authentication over HTTP. Credentials will travel in cleartext over the network.");
 }
 // SSPI auto-selection: on-prem + Windows + no explicit auth override → sspi
 let effectiveAuthType = argv.authentication;
 if (isOnPrem && process.platform === "win32" && argv.authentication === defaultAuthenticationType) {
     effectiveAuthType = "sspi";
     logger.info("On-prem URL detected on Windows — using SSPI authentication (override with --authentication pat)");
+}
+if (argv.allowHttp && effectiveAuthType === "pat") {
+    logger.warn("WARNING: Using PAT authentication over HTTP. Credentials will travel in cleartext over the network.");
 }
 // Platform guard: sspi only on Windows
 if (effectiveAuthType === "sspi" && process.platform !== "win32") {
@@ -155,8 +155,11 @@ async function main() {
         const basicValue = await authenticator();
         // basicValue is already base64("{email}:{token}") — use it directly in the Authorization header
         const _originalFetch = globalThis.fetch;
+        const orgOrigin = new URL(orgUrl).origin;
+        const isAdoRequest = (url) => url.startsWith(orgOrigin) || url.startsWith("https://almsearch.dev.azure.com/");
         globalThis.fetch = async (input, init) => {
-            if (init?.headers) {
+            const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+            if (init?.headers && isAdoRequest(requestUrl)) {
                 const headers = new Headers(init.headers);
                 if (headers.get("Authorization")?.startsWith("Bearer ")) {
                     headers.set("Authorization", `Basic ${basicValue}`);
@@ -165,7 +168,7 @@ async function main() {
             }
             return _originalFetch(input, init);
         };
-        logger.debug("PAT mode: global fetch interceptor installed to rewrite Bearer -> Basic auth headers");
+        logger.debug("PAT mode: global fetch interceptor installed to rewrite Bearer -> Basic auth headers (scoped to ADO URLs)");
     }
     // removing prompts until further notice
     // configurePrompts(server);
@@ -175,11 +178,11 @@ async function main() {
         try {
             const checkUrl = `${orgUrl}/_apis/connectionData`;
             if (effectiveAuthType === "sspi") {
-                // For SSPI, use the WebApi connection which handles the Negotiate handshake
-                const connection = await getAzureDevOpsClient(authenticator, userAgentComposer, effectiveAuthType)();
+                // For SSPI, verify server is reachable (actual auth happens via WebApi on first API call)
                 const response = await fetch(checkUrl, {
                     method: "GET",
                     headers: { "Content-Type": "application/json", "User-Agent": userAgentComposer.userAgent },
+                    signal: AbortSignal.timeout(10_000),
                 });
                 // If fetch without auth returns 401, that's expected (SSPI will handle it on actual API calls via WebApi)
                 // We just verify the server is reachable
@@ -216,7 +219,7 @@ async function main() {
                 else {
                     headers["Authorization"] = `Bearer ${token}`;
                 }
-                const response = await fetch(checkUrl, { method: "GET", headers });
+                const response = await fetch(checkUrl, { method: "GET", headers, signal: AbortSignal.timeout(10_000) });
                 if (!response.ok) {
                     logger.error(`On-prem connection check failed: HTTP ${response.status} ${response.statusText} from ${checkUrl}`);
                     process.exit(1);
