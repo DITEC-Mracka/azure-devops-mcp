@@ -203,73 +203,126 @@ async function main() {
     };
     logger.debug("PAT mode: global fetch interceptor installed to rewrite Bearer -> Basic auth headers (scoped to ADO URLs)");
   } else if (effectiveAuthType === "sspi") {
-    // SSPI fetch interceptor: perform Negotiate/NTLM handshake for raw fetch calls to the on-prem server
+    // SSPI fetch interceptor: perform Negotiate/NTLM handshake for raw fetch calls to the on-prem server.
+    // Uses raw http/https with a per-request keep-alive agent (maxSockets:1) to guarantee
+    // the entire NTLM handshake happens on the same TCP socket.
     const _originalFetch = globalThis.fetch;
     const orgOrigin = new URL(orgUrl).origin;
+    const orgParsed = new URL(orgUrl);
+    const isHttps = orgParsed.protocol === "https:";
+
+    // Raw HTTP request helper with dedicated keep-alive agent per handshake
+    const httpMod = await import("http");
+    const httpsMod = await import("https");
+
+    function rawHttpRequest(
+      url: URL,
+      method: string,
+      headers: Record<string, string>,
+      body: string | undefined,
+      agent: import("http").Agent
+    ): Promise<{ statusCode: number; headers: Record<string, string>; body: string }> {
+      return new Promise((resolve, reject) => {
+        const options = {
+          hostname: url.hostname,
+          port: url.port || (url.protocol === "https:" ? 443 : 80),
+          path: url.pathname + url.search,
+          method,
+          headers: { ...headers, Connection: "keep-alive" },
+          agent,
+        };
+        const transport = url.protocol === "https:" ? httpsMod : httpMod;
+        const req = transport.request(options, (res) => {
+          const chunks: Buffer[] = [];
+          res.on("data", (chunk: Buffer) => chunks.push(chunk));
+          res.on("end", () => {
+            const responseHeaders: Record<string, string> = {};
+            for (const [k, v] of Object.entries(res.headers)) {
+              if (v) responseHeaders[k] = Array.isArray(v) ? v.join(", ") : v;
+            }
+            resolve({ statusCode: res.statusCode ?? 0, headers: responseHeaders, body: Buffer.concat(chunks).toString("utf8") });
+          });
+        });
+        req.setTimeout(30_000, () => req.destroy(new Error("SSPI fetch request timed out after 30s")));
+        req.on("error", reject);
+        if (body) req.write(body);
+        req.end();
+      });
+    }
+
     globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
       if (!requestUrl.startsWith(orgOrigin)) {
         return _originalFetch(input, init);
       }
 
-      // Force HTTP/1.1 for on-prem (IIS often rejects HTTP/2)
-      const fetchOpts = { ...init, dispatcher: onPremDispatcher } as RequestInit;
+      const url = new URL(requestUrl);
+      const method = init?.method ?? "GET";
+      const body = typeof init?.body === "string" ? init.body : undefined;
 
-      // Make initial request without auth header (avoid sending malformed 'Bearer ')
-      const probeHeaders = new Headers(init?.headers);
-      probeHeaders.delete("Authorization");
-      let response = await _originalFetch(input, { ...fetchOpts, headers: probeHeaders });
-      if (response.status !== 401) return response;
-
-      // Check for Negotiate/NTLM challenge
-      const wwwAuth = response.headers.get("www-authenticate");
-      if (!wwwAuth || (!wwwAuth.toLowerCase().includes("negotiate") && !wwwAuth.toLowerCase().includes("ntlm"))) {
-        return response;
+      // Build headers from init
+      const headers: Record<string, string> = {};
+      if (init?.headers) {
+        const h = init.headers instanceof Headers ? init.headers : new Headers(init.headers as HeadersInit);
+        h.forEach((v, k) => {
+          if (k.toLowerCase() !== "authorization") headers[k] = v;
+        });
       }
 
-      // Drain probe response body to free TCP connection for handshake
-      await response.body?.cancel();
-
-      // Perform SSPI handshake
-      const winSso = await import("win-sso");
-      const targetHost = new URL(requestUrl).hostname;
-      const sso = new winSso.WinSso("Negotiate", targetHost, undefined, undefined);
+      // Create a dedicated keep-alive agent for this handshake (maxSockets:1 = same TCP socket)
+      const agent = isHttps
+        ? new httpsMod.Agent({ keepAlive: true, maxSockets: 1, rejectUnauthorized: process.env.NODE_TLS_REJECT_UNAUTHORIZED !== "0" })
+        : new httpMod.Agent({ keepAlive: true, maxSockets: 1 });
 
       try {
-        const authHeader = sso.createAuthRequestHeader();
-        const headers = new Headers(init?.headers);
-        headers.set("Authorization", authHeader);
-        headers.set("Connection", "keep-alive");
-
-        response = await _originalFetch(input, { ...fetchOpts, headers });
-
-        // Multi-round-trip loop for NTLM (Type1 → Type2 → Type3)
-        let rounds = 0;
-        while (response.status === 401 && rounds < 5) {
-          const serverAuth = response.headers.get("www-authenticate");
-          if (!serverAuth) break;
-          // Extract only the Negotiate token from potentially multi-scheme header
-          // e.g. "Bearer, Basic realm=..., Negotiate YII..., NTLM" → "Negotiate YII..."
-          const negotiatePart = serverAuth
-            .split(",")
-            .map((s) => s.trim())
-            .find((s) => s.toLowerCase().startsWith("negotiate "));
-          if (!negotiatePart) break;
-          const responseHeader = sso.createAuthResponseHeader(negotiatePart);
-          if (!responseHeader) break;
-          await response.body?.cancel();
-          headers.set("Authorization", responseHeader);
-          response = await _originalFetch(input, { ...fetchOpts, headers });
-          rounds++;
+        // Probe: establish connection
+        let response = await rawHttpRequest(url, method, headers, body, agent);
+        if (response.statusCode !== 401) {
+          return new Response(response.body, { status: response.statusCode, headers: response.headers });
         }
 
-        return response;
-      } finally {
+        // Check for Negotiate/NTLM challenge
+        const wwwAuth = response.headers["www-authenticate"] ?? "";
+        if (!wwwAuth.toLowerCase().includes("negotiate") && !wwwAuth.toLowerCase().includes("ntlm")) {
+          return new Response(response.body, { status: response.statusCode, headers: response.headers });
+        }
+
+        // SSPI handshake on the SAME socket
+        const winSso = await import("win-sso");
+        const targetHost = url.hostname;
+        const sso = new winSso.WinSso("Negotiate", targetHost, undefined, undefined);
+
         try {
-          sso.freeAuthContext();
-        } catch {
-          /* ignore cleanup errors */
+          // Type1 token
+          headers["Authorization"] = sso.createAuthRequestHeader();
+          response = await rawHttpRequest(url, method, headers, body, agent);
+
+          // Multi-round-trip (NTLM Type1 → Type2 → Type3)
+          let rounds = 0;
+          while (response.statusCode === 401 && rounds < 5) {
+            const serverAuth = response.headers["www-authenticate"] ?? "";
+            const negotiatePart = serverAuth
+              .split(",")
+              .map((s) => s.trim())
+              .find((s) => s.toLowerCase().startsWith("negotiate "));
+            if (!negotiatePart) break;
+            const responseHeader = sso.createAuthResponseHeader(negotiatePart);
+            if (!responseHeader) break;
+            headers["Authorization"] = responseHeader;
+            response = await rawHttpRequest(url, method, headers, body, agent);
+            rounds++;
+          }
+
+          return new Response(response.body, { status: response.statusCode, headers: response.headers });
+        } finally {
+          try {
+            sso.freeAuthContext();
+          } catch {
+            /* ignore */
+          }
         }
+      } finally {
+        agent.destroy();
       }
     };
     logger.debug("SSPI mode: global fetch interceptor installed for Negotiate auth (scoped to on-prem server)");
