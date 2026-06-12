@@ -1,8 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
-export const apiVersion = "7.2-preview.1";
+export const apiVersion = "7.1-preview.1";
 export const batchApiVersion = "5.0";
-export const markdownCommentsApiVersion = "7.2-preview.4";
+export const markdownCommentsApiVersion = "7.1-preview.3";
 /**
  * Resolves the organization argument to a URL and mode (cloud vs on-prem).
  * - Plain org name → cloud mode, https://dev.azure.com/{org}
