@@ -1,1 +1,18 @@
-../mcp.json
+{
+  "servers": {
+    "ado": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/dist/index.js",
+        "https://dev-tfs/tfs/internal_projects",
+        "--authentication",
+        "sspi"
+      ],
+      "env": {
+        "LOG_LEVEL": "debug",
+        "NODE_OPTIONS": "--use-system-ca"
+      }
+    }
+  }
+}
