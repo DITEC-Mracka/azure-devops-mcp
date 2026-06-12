@@ -928,7 +928,9 @@ describe("configureWorkItemTools", () => {
       // Mock fetch for the API call
       const mockFetch = jest.fn().mockResolvedValue({
         ok: false,
+        status: 404,
         statusText: "Not Found",
+        text: () => Promise.resolve(""),
       });
       global.fetch = mockFetch;
 
@@ -941,7 +943,7 @@ describe("configureWorkItemTools", () => {
       const result = await handler({ action: "add", ...params });
       expect(result.isError).toBe(true);
       expect(result.content[0].text).toContain("Error adding work item comment");
-      expect(result.content[0].text).toContain("Failed to add a work item comment: Not Found");
+      expect(result.content[0].text).toContain("Failed to add a work item comment: 404 Not Found");
     });
 
     it("should encode the project parameter to prevent URL path injection", async () => {

@@ -781,7 +781,8 @@ function configureWorkItemTools(server: McpServer, tokenProvider: () => Promise<
           );
 
           if (!response.ok) {
-            throw new Error(`Failed to add a work item comment: ${response.statusText}`);
+            const errorBody = typeof response.text === "function" ? await response.text().catch(() => "") : "";
+            throw new Error(`Failed to add a work item comment: ${response.status} ${response.statusText}${errorBody ? ` - ${errorBody}` : ""}`);
           }
 
           return { content: [{ type: "text", text: await response.text() }] };
