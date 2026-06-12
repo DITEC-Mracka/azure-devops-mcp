@@ -322,7 +322,8 @@ function configureWorkItemTools(server, tokenProvider, connectionProvider, userA
                 body: JSON.stringify(body),
             });
             if (!response.ok) {
-                throw new Error(`Failed to add a work item comment: ${response.statusText}}`);
+                const errorBody = typeof response.text === "function" ? await response.text().catch(() => "") : "";
+                throw new Error(`Failed to add a work item comment: ${response.status} ${response.statusText}${errorBody ? ` - ${errorBody}` : ""}`);
             }
             const comments = await response.text();
             return {
