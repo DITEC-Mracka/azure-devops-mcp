@@ -1,0 +1,7 @@
+{
+  // Editor-only config so VS Code associates test files with the Jest-aware
+  // settings (CommonJS/Node resolution + @types/jest globals). The build uses
+  // the root tsconfig.json and the test run uses tsconfig.jest.json.
+  "extends": "../tsconfig.jest.json",
+  "include": ["./**/*"]
+}

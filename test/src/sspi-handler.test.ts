@@ -91,70 +91,51 @@ describe("SspiRequestHandler", () => {
   });
 
   describe("handleAuthentication", () => {
-    it("should perform Negotiate handshake and return response on success", async () => {
-      const successResponse = {
-        message: { statusCode: 200, headers: {} },
-      };
-      const mockHttpClient = {
-        requestRaw: jest.fn().mockResolvedValue(successResponse),
-      };
-      const mockRequestInfo = {
-        options: { headers: {} },
-        parsedUrl: { hostname: "dev-tfs" },
-      };
+    // The handshake is performed via the private rawRequest method (raw http/https over a
+    // keep-alive socket), so we spy on it instead of the typed-rest-client httpClient.
+    const mockRequestInfo = {
+      options: { method: "GET", headers: {} },
+      parsedUrl: { href: "https://dev-tfs/tfs/internal_projects/_apis/connectionData" },
+    };
 
-      const result = await handler.handleAuthentication(mockHttpClient as any, mockRequestInfo as any, "");
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it("should perform Negotiate handshake and return response on success", async () => {
+      // Probe returns a 401 Negotiate challenge, the Type1 token then succeeds.
+      const rawSpy = jest
+        .spyOn(SspiRequestHandler.prototype as any, "rawRequest")
+        .mockResolvedValueOnce({ statusCode: 401, headers: { "www-authenticate": "Negotiate" }, body: "" })
+        .mockResolvedValueOnce({ statusCode: 200, headers: {}, body: "OK" });
+
+      const result = await handler.handleAuthentication({} as any, mockRequestInfo as any, "");
+
       expect(result.message.statusCode).toBe(200);
-      expect(mockHttpClient.requestRaw).toHaveBeenCalledTimes(1);
+      await expect(result.readBody()).resolves.toBe("OK");
+      expect(rawSpy).toHaveBeenCalledTimes(2);
     });
 
     it("should handle multi-round-trip NTLM handshake", async () => {
-      const challengeResponse = {
-        message: {
-          statusCode: 401,
-          headers: { "www-authenticate": "Negotiate TlRMTVNTUAACAAAA" },
-          resume: jest.fn(),
-          on: jest.fn((event: string, cb: () => void) => {
-            cb();
-          }),
-        },
-      };
-      const successResponse = {
-        message: { statusCode: 200, headers: {} },
-      };
-      const mockHttpClient = {
-        requestRaw: jest.fn().mockResolvedValueOnce(challengeResponse).mockResolvedValueOnce(successResponse),
-      };
-      const mockRequestInfo = {
-        options: { headers: {} },
-        parsedUrl: { hostname: "dev-tfs" },
-      };
+      // Probe -> 401, Type1 -> 401 (server continues), next round -> 200.
+      const challenge = { statusCode: 401, headers: { "www-authenticate": "Negotiate TlRMTVNTUAACAAAA" }, body: "" };
+      const rawSpy = jest
+        .spyOn(SspiRequestHandler.prototype as any, "rawRequest")
+        .mockResolvedValueOnce(challenge)
+        .mockResolvedValueOnce(challenge)
+        .mockResolvedValueOnce({ statusCode: 200, headers: {}, body: "OK" });
 
-      const result = await handler.handleAuthentication(mockHttpClient as any, mockRequestInfo as any, "");
+      const result = await handler.handleAuthentication({} as any, mockRequestInfo as any, "");
+
       expect(result.message.statusCode).toBe(200);
-      expect(mockHttpClient.requestRaw).toHaveBeenCalledTimes(2);
+      expect(rawSpy).toHaveBeenCalledTimes(3);
     });
 
     it("should throw when server rejects auth after max rounds", async () => {
-      const rejectResponse = {
-        message: {
-          statusCode: 401,
-          headers: { "www-authenticate": "Negotiate blob" },
-          resume: jest.fn(),
-          on: jest.fn((event: string, cb: () => void) => {
-            cb();
-          }),
-        },
-      };
-      const mockHttpClient = {
-        requestRaw: jest.fn().mockResolvedValue(rejectResponse),
-      };
-      const mockRequestInfo = {
-        options: { headers: {} },
-        parsedUrl: { hostname: "dev-tfs" },
-      };
+      // Server keeps returning 401 with a Negotiate challenge on every round.
+      jest.spyOn(SspiRequestHandler.prototype as any, "rawRequest").mockResolvedValue({ statusCode: 401, headers: { "www-authenticate": "Negotiate blob" }, body: "" });
 
-      await expect(handler.handleAuthentication(mockHttpClient as any, mockRequestInfo as any, "")).rejects.toThrow("SSPI authentication failed after multiple rounds");
+      await expect(handler.handleAuthentication({} as any, mockRequestInfo as any, "")).rejects.toThrow("SSPI authentication failed after multiple rounds");
     });
   });
 });
