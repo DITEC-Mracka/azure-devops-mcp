@@ -571,7 +571,7 @@ describe("configureCoreTools", () => {
       const params = { searchFilter: "john.doe@example.com" };
       const result = await handler(params);
 
-      expect(global.fetch).toHaveBeenCalledWith("https://dev.azure.com/test-org/_apis/identities?api-version=7.2-preview.1&searchFilter=General&filterValue=john.doe%40example.com", {
+      expect(global.fetch).toHaveBeenCalledWith("https://dev.azure.com/test-org/_apis/identities?api-version=7.1-preview.1&searchFilter=General&filterValue=john.doe%40example.com", {
         headers: {
           "Authorization": "Bearer fake-token",
           "Content-Type": "application/json",

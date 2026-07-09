@@ -843,7 +843,7 @@ describe("configureWorkItemTools", () => {
       const result = await handler({ action: "add", ...params });
 
       expect(mockFetch).toHaveBeenCalledWith(
-        "https://dev.azure.com/contoso/Contoso/_apis/wit/workItems/299/comments?format=0&api-version=7.2-preview.4",
+        "https://dev.azure.com/contoso/Contoso/_apis/wit/workItems/299/comments?format=0&api-version=7.1-preview.3",
         expect.objectContaining({
           method: "POST",
           headers: expect.objectContaining({
@@ -884,7 +884,7 @@ describe("configureWorkItemTools", () => {
       const result = await handler({ action: "add", ...params });
 
       expect(mockFetch).toHaveBeenCalledWith(
-        "https://dev.azure.com/contoso/Contoso/_apis/wit/workItems/299/comments?format=0&api-version=7.2-preview.4",
+        "https://dev.azure.com/contoso/Contoso/_apis/wit/workItems/299/comments?format=0&api-version=7.1-preview.3",
         expect.objectContaining({
           method: "POST",
           headers: expect.objectContaining({
@@ -911,7 +911,7 @@ describe("configureWorkItemTools", () => {
 
       await handler({ action: "add", text: "hello world!", project: "Contoso", workItemId: 299, format: "Html" });
 
-      expect(mockFetch).toHaveBeenCalledWith("https://dev.azure.com/contoso/Contoso/_apis/wit/workItems/299/comments?format=1&api-version=7.2-preview.4", expect.objectContaining({ method: "POST" }));
+      expect(mockFetch).toHaveBeenCalledWith("https://dev.azure.com/contoso/Contoso/_apis/wit/workItems/299/comments?format=1&api-version=7.1-preview.3", expect.objectContaining({ method: "POST" }));
     });
 
     it("should handle fetch failure response", async () => {
@@ -1038,7 +1038,7 @@ describe("configureWorkItemTools", () => {
       const result = await handler({ action: "update", ...params });
 
       expect(mockFetch).toHaveBeenCalledWith(
-        "https://dev.azure.com/contoso/TestProject/_apis/wit/workItems/42/comments/100?format=0&api-version=7.2-preview.4",
+        "https://dev.azure.com/contoso/TestProject/_apis/wit/workItems/42/comments/100?format=0&api-version=7.1-preview.3",
         expect.objectContaining({
           method: "PATCH",
           headers: expect.objectContaining({

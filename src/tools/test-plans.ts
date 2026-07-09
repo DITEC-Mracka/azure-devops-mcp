@@ -122,7 +122,7 @@ function configureTestPlanTools(server: McpServer, tokenProvider: () => Promise<
           if (!planId) return { content: [{ type: "text", text: "planId is required for list_cases" }], isError: true };
           if (!suiteId) return { content: [{ type: "text", text: "suiteId is required for list_cases" }], isError: true };
 
-          const params = new URLSearchParams({ "api-version": "7.2-preview.3" });
+          const params = new URLSearchParams({ "api-version": "7.1-preview.3" }); // 7.1 for on-prem Azure DevOps Server compatibility (7.2 is rejected with VssVersionOutOfRangeException).
           if (continuationToken) params.append("continuationToken", continuationToken);
           const url = `${connection.serverUrl}/${encodeURIComponent(project)}/_apis/testplan/Plans/${planId}/Suites/${suiteId}/TestCase?${params.toString()}`;
 

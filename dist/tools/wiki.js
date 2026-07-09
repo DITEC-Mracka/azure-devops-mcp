@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 import { z } from "zod";
-import { apiVersion, extractAdoStreamError } from "../utils.js";
+import { apiVersion, extractAdoStreamError, getOrgFromUrl } from "../utils.js";
 import { createExternalContentResponse } from "../shared/content-safety.js";
 const WIKI_TOOLS = {
     list_wikis: "wiki_list_wikis",
@@ -164,6 +164,22 @@ function configureWikiTools(server, tokenProvider, connectionProvider, userAgent
                 const parsed = parseWikiUrl(url);
                 if ("error" in parsed) {
                     return { content: [{ type: "text", text: `Error fetching wiki page content: ${parsed.error}` }], isError: true };
+                }
+                // Guard against cross-organization requests: a user-supplied URL must target the
+                // same organization the server is connected to. Otherwise the org segment in the
+                // URL would be silently ignored and content fetched from the configured org instead.
+                const configuredOrg = getOrgFromUrl(connection.serverUrl);
+                const urlOrg = getOrgFromUrl(url);
+                if (configuredOrg && urlOrg !== configuredOrg) {
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: `Error fetching wiki page content: The provided URL targets organization '${urlOrg ?? "unknown"}', which does not match the configured organization '${configuredOrg}'. Cross-organization requests are not allowed.`,
+                            },
+                        ],
+                        isError: true,
+                    };
                 }
                 resolvedProject = parsed.project;
                 resolvedWiki = parsed.wikiIdentifier;

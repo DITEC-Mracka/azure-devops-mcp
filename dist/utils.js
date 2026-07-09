@@ -1,5 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
+// Azure DevOps Server (on-prem) supports max API version 7.1.
+// 7.2-preview requests are rejected with VssVersionOutOfRangeException.
+// Verified against real on-prem TFS (SSPI + comment API). See ditec commit 86f7210.
 export const apiVersion = "7.1-preview.1";
 export const batchApiVersion = "5.0";
 export const markdownCommentsApiVersion = "7.1-preview.3";
@@ -124,6 +127,37 @@ export function extractAdoStreamError(content) {
         // Not JSON — not an ADO error response.
     }
     return null;
+}
+/**
+ * Extracts the Azure DevOps organization identifier from a URL.
+ *
+ * Only recognized Azure DevOps hosts are accepted; any other host returns null
+ * so that callers can treat unrecognized URLs as a boundary violation.
+ *
+ * Supports both modern and legacy organization URL forms:
+ *  - https://dev.azure.com/{org}/...            -> org is the first path segment
+ *  - https://{org}.visualstudio.com/...         -> org is the host subdomain
+ *
+ * @param url Any Azure DevOps URL (e.g. a wiki page link or a connection serverUrl).
+ * @returns The lowercased organization name, or null if it cannot be determined.
+ */
+export function getOrgFromUrl(url) {
+    try {
+        const u = new URL(url);
+        const host = u.hostname.toLowerCase();
+        if (host === "visualstudio.com" || host.endsWith(".visualstudio.com")) {
+            const subdomain = host.split(".")[0];
+            return subdomain && subdomain !== "visualstudio" ? subdomain : null;
+        }
+        if (host === "dev.azure.com" || host.endsWith(".dev.azure.com")) {
+            const firstSegment = u.pathname.split("/").filter(Boolean)[0];
+            return firstSegment ? firstSegment.toLowerCase() : null;
+        }
+        return null;
+    }
+    catch {
+        return null;
+    }
 }
 /**
  * Convert a Node.js ReadableStream to a string.

@@ -424,7 +424,7 @@ describe("configureWikiTools", () => {
       const result = await handler(params);
 
       expect(mockFetch).toHaveBeenCalledWith(
-        "https://dev.azure.com/testorg/proj1/_apis/wiki/wikis/wiki1/pages?path=%2FHome&api-version=7.2-preview.1",
+        "https://dev.azure.com/testorg/proj1/_apis/wiki/wikis/wiki1/pages?path=%2FHome&api-version=7.1-preview.1",
         expect.objectContaining({
           headers: expect.objectContaining({
             "Authorization": "Bearer test-token",
@@ -605,7 +605,7 @@ describe("configureWikiTools", () => {
 
       const calledUrl = mockFetch.mock.calls[0][0];
       expect(calledUrl).toBe(
-        "https://dev.azure.com/testorg/27927f1c-99f6-432f-8cd5-826576c1a20c/_apis/wiki/wikis/15e3217e-0375-4d00-8895-1b6b6ad32837/pages?path=%2FTesting%2FSetup-Guide&api-version=7.2-preview.1"
+        "https://dev.azure.com/testorg/27927f1c-99f6-432f-8cd5-826576c1a20c/_apis/wiki/wikis/15e3217e-0375-4d00-8895-1b6b6ad32837/pages?path=%2FTesting%2FSetup-Guide&api-version=7.1-preview.1"
       );
     });
 

@@ -1,6 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+// Azure DevOps Server (on-prem) supports max API version 7.1.
+// 7.2-preview requests are rejected with VssVersionOutOfRangeException.
+// Verified against real on-prem TFS (SSPI + comment API). See ditec commit 86f7210.
 export const apiVersion = "7.1-preview.1";
 export const batchApiVersion = "5.0";
 export const markdownCommentsApiVersion = "7.1-preview.3";
