@@ -9,10 +9,12 @@ applies_when:
   - "Rebasing or syncing the ditec (on-prem) fork onto microsoft/azure-devops-mcp main"
   - "Resolving conflicts in src/utils.ts, package-lock.json, or tests after an upstream pull"
   - "Upstream bumped API versions, changed auth internals, or updated hardcoded test expectations"
+  - "Upstream landed a tool-consolidation PR that restructured a module a fork fix lives in"
 symptoms:
   - "Merge conflict resolved by silently taking upstream's side, breaking on-prem behavior"
   - "14 tests fail after rebase due to hardcoded API-version string mismatches"
   - "Editor reports 'Cannot find namespace jest' in test files after tree changes"
+  - "A fork fix silently disappears when git applies it to a function upstream renamed or merged away"
 tags:
   - fork-management
   - upstream-sync
@@ -20,6 +22,8 @@ tags:
   - on-prem
   - api-version
   - conflict-resolution
+  - tool-consolidation
+  - force-with-lease
 ---
 
 # Rebasing the on-prem fork onto upstream: what to preserve and what to take
@@ -31,6 +35,20 @@ The `ditec` branch of our `DITEC-Mracka/azure-devops-mcp` fork carries on-prem A
 The friction: upstream is a **cloud-first** codebase. Several upstream changes are actively wrong for on-prem TFS, so a naive "take upstream's side" conflict resolution silently reintroduces bugs the fork already fixed. On the last rebase this happened with API versions, and cascaded into 14 failing tests plus an editor-only TypeScript error — none of which the rebase itself reported as conflicts.
 
 This doc is the checklist of **what to preserve (ours) vs. take (upstream)** so the next rebase doesn't re-derive it from scratch.
+
+## The procedure at a glance
+
+The conflict-resolution rules below are the _contract_; the outer loop is always the same repeatable, plan-first procedure. Write the per-rebase plan (topology + predicted conflicts) first, then execute it:
+
+1. **Map the topology.** `git merge-base ditec origin/main`, then `git log --oneline <base>..origin/ditec` (our commits to replay) and `<base>..origin/main` (incoming upstream). Know how many commits replay onto what.
+2. **Predict conflicts by file overlap.** Intersect `git diff --name-only <base> origin/ditec` with `git diff --name-only <base> origin/main`. The intersection _is_ your conflict list — pre-classify each against the cheat sheet before starting.
+3. **Scan the incoming batch for tool consolidations** (Rule 7) — they turn small line-fixes into re-apply-by-intent work and are the highest-risk conflicts.
+4. **Safety ref, then rebase.** `git branch backup/ditec-pre-rebase-<date> origin/ditec`; `git rebase origin/main`, resolving each stop per Rules 1–7.
+5. **Regenerate, don't hand-merge.** `npm install` (lockfile, Rule 5) → `npm run build` (dist) → `npm test` → `npm run validate-tools`.
+6. **Verify intent survived.** The 7.2 grep (Rule 1) and the per-fix unique-string greps (Rule 7) are the tripwire — a green build alone does not prove the fork's fixes are still present.
+7. **Publish with a lease.** `git push --force-with-lease origin ditec` (rebase rewrites the branch; **never** plain `--force`). On rejection, inspect the concurrent push — do not force over it. Then fast-forward local `main` to `origin/main`.
+
+Why plan-first: the topology and overlap maps (steps 1–2) are cheap to compute and turn a blind rebase into a checklist where every stop is expected. Steps 3 and 6 exist because the dangerous failures are _silent_ (see Rule 7 and Why This Matters).
 
 ## Guidance
 
@@ -114,6 +132,36 @@ The `npm install` regeneration is what actually matters; the checkout just gives
 
 Prefer the editor's language server (get-errors) and a single `npm test` run for verification. A full-project `npx tsc` type-check is slow and can hold the terminal open, which looks like a hang. Never leave a watch-mode or full `tsc` running as a "check".
 
+### Rule 7 — Upstream _tool consolidations_ restructure modules: re-apply by intent, then grep to verify
+
+Periodically upstream lands large **tool-consolidation** PRs (e.g. work-items #1435, test-plan #1431, pipeline #1428, wiki #1423) that move, rename, or merge whole tool handlers into a single action-dispatched tool. When a fork fix lives in a function these PRs restructured, git cannot align the small hunk: it drops the fix into a hunk that no longer exists, applies it to a renamed function, or — worst — reports a _clean_ apply that silently lost the fix. **Do not trust the auto-merge; re-apply the fix's _intent_ onto upstream's new structure** (take `--ours` = the consolidated file, then port the fork change into it).
+
+Two concrete cases from the 2026-07-22 rebase:
+
+- **work-items comment fix** — upstream's consolidation had already dropped the extra-brace typo but _not_ the fork's status-code + response-body diagnostics. Took the consolidated handler, then re-added only the diagnostics. Now at [src/tools/work-items.ts](../../../src/tools/work-items.ts) line 785:
+
+  ```typescript
+  throw new Error(`Failed to add a work item comment: ${response.status} ${response.statusText}${errorBody ? ` - ${errorBody}` : ""}`);
+  ```
+
+- **test-plans `list_test_cases`** — took the consolidated file, then downgraded the inline version to 7.1 per Rule 1. Now at [src/tools/test-plans.ts](../../../src/tools/test-plans.ts) line 125 (`"7.1-preview.3"`).
+
+**Prove intent survived — don't eyeball `git show`.** After the rebase, grep for a unique string from each fix; each must return exactly one live hit. Fold this into the Rule 1 version-check pass:
+
+```powershell
+# each must return exactly one hit; zero (or the old text) means a consolidation ate the fix
+Select-String -Path src/tools/work-items.ts -Pattern 'Failed to add a work item comment'  # improved throw, NOT the old ${response.statusText}} typo
+Select-String -Path src/tools/test-plans.ts -Pattern '7\.1-preview\.3'                     # on-prem version in list_test_cases
+```
+
+### Rule 8 — `server.json`: drop upstream's cloud-only `remotes` and `packages`
+
+Upstream adds cloud-only fields to `server.json` — a `remotes` block pointing at `mcp.dev.azure.com` and a `packages` entry for the npm `@microsoft/azure-devops` release. Neither applies to the on-prem fork: the cloud remote is meaningless against an on-prem Server, and the fork installs via **direct GitHub**, not npm. On conflict, **keep ours** (the fork manifest that omits both). Verify after rebase that `server.json` still has no `remotes` / `packages` / `mcp.dev.azure.com`.
+
+### Rule 9 — Publish with `--force-with-lease`, and read a rejection as a signal
+
+The rebase rewrites `ditec`'s history, so publishing requires a force push. Always use the lease: `git push --force-with-lease origin ditec`, **never** plain `--force`. A rejection is not something to power through — it means `origin/ditec` moved since the safety ref was taken (a concurrent push). Inspect it (`git fetch origin ditec; git log --oneline -3 origin/ditec`), coordinate if it is real work, else reset to the backup ref and retry. Then realign local `main`: `git checkout main; git merge --ff-only origin/main; git checkout ditec`.
+
 ## Why This Matters
 
 The dangerous failure mode is **silent**: git reports a conflict only on the exact lines that differ, so taking upstream's `7.2` in `src/utils.ts` looks like a clean resolution and compiles fine. The breakage only surfaces at runtime against a real TFS (`VssVersionOutOfRangeException` on every call) — long after the rebase is "done". The 14 unit-test failures are actually a _gift_: they're the tripwire that catches Rule 1 being violated. Understanding that the tests encode the fork's intent (7.1) — not upstream's (7.2) — is what turns a confusing red suite into a clear signal.
@@ -144,11 +192,15 @@ npm test                                # expect: all suites pass
 
 Conflict-resolution cheat sheet:
 
-| File                                         | On conflict, keep…                 | Why                                                       |
-| -------------------------------------------- | ---------------------------------- | --------------------------------------------------------- |
-| `src/utils.ts` (api versions)                | **ours (7.1)**                     | On-prem TFS rejects 7.2 (`VssVersionOutOfRangeException`) |
-| `src/tools/test-plans.ts` (inline version)   | **ours (7.1)**                     | Same on-prem constraint; upstream missed this one         |
-| `test/**/*.test.ts` (version in URL asserts) | **7.1 to match code**              | Tests assert URL construction, not a live server          |
-| `src/sspi-handler.ts`                        | **ours**                           | On-prem SSPI/Negotiate handshake is fork-specific         |
-| `test/tsconfig.json`                         | **ours (keep it)**                 | Editor-only `@types/jest` association; not in build       |
-| `package-lock.json`                          | **newer tree, then `npm install`** | Hand-merging lockfiles corrupts them                      |
+| File                                         | On conflict, keep…                    | Why                                                                                           |
+| -------------------------------------------- | ------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `src/utils.ts` (api versions)                | **ours (7.1)**                        | On-prem TFS rejects 7.2 (`VssVersionOutOfRangeException`)                                     |
+| `src/tools/test-plans.ts` (inline version)   | **ours (7.1)**                        | Same on-prem constraint; upstream missed this one                                             |
+| `test/**/*.test.ts` (version in URL asserts) | **7.1 to match code**                 | Tests assert URL construction, not a live server                                              |
+| `src/sspi-handler.ts`                        | **ours**                              | On-prem SSPI/Negotiate handshake is fork-specific                                             |
+| `test/tsconfig.json`                         | **ours (keep it)**                    | Editor-only `@types/jest` association; not in build                                           |
+| `package-lock.json`                          | **newer tree, then `npm install`**    | Hand-merging lockfiles corrupts them                                                          |
+| `src/tools/*.ts` hit by a consolidation PR   | **theirs (structure) + re-port ours** | Consolidation renamed/merged the handler; port the fix's intent, then grep to verify (Rule 7) |
+| `server.json` (`remotes` / `packages`)       | **ours (drop cloud fields)**          | Cloud remote + npm package don't apply on-prem (Rule 8)                                       |
+
+Publishing the rebased branch: `git push --force-with-lease origin ditec` — never plain `--force` (Rule 9).
